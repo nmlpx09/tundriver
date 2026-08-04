@@ -15,7 +15,7 @@
 #define VNET_SEND_FIFO_SIZE 256
 #define MTU 1472
 
-static char *dest_ip = "158.255.0.70";
+static char *dest_ip = "";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -350,5 +350,5 @@ module_init(vnet_init);
 module_exit(vnet_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("vnet");
-MODULE_DESCRIPTION("Virtual Network Device with UDP tunneling via sk_data_ready");
+MODULE_AUTHOR("nlmpx09");
+MODULE_DESCRIPTION("tunnel driver");
