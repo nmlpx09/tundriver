@@ -25,8 +25,6 @@ MODULE_PARM_DESC(dest_port, "Destination UDP port");
 module_param(src_port, int, 0644);
 MODULE_PARM_DESC(src_port, "Source UDP port to listen on");
 
-static const u8 vnet_mac_addr[ETH_ALEN] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
-
 static struct net_device *vnet_dev;
 
 struct vnet_priv {
@@ -52,7 +50,7 @@ static void vnet_send_work(struct work_struct *work)
     unsigned long flags;
     int len;
 
-    while (1) {
+    while (true) {
         spin_lock_irqsave(&priv->send_lock, flags);
         if (!kfifo_get(&priv->send_fifo, &skb)) {
             spin_unlock_irqrestore(&priv->send_lock, flags);
@@ -90,7 +88,7 @@ static void vnet_recv_work(struct work_struct *work)
     struct net_device *dev = priv->vnet_dev;
     char buf[ETH_FRAME_LEN];
 
-    while (1) {
+    while (true) {
         if (!netif_running(dev)) {
             break;
         }
@@ -103,12 +101,14 @@ static void vnet_recv_work(struct work_struct *work)
         kv.iov_len = sizeof(buf);
 
         len = kernel_recvmsg(priv->sock, &msg, &kv, 1, sizeof(buf), MSG_DONTWAIT);
-        if (len <= 0)
+        if (len <= 0) {
             break;
+        }
 
         struct sk_buff *skb = netdev_alloc_skb(dev, len + ETH_HLEN + 2);
-        if (!skb)
+        if (!skb) {
             continue;
+        }
 
         skb_reserve(skb, 2);
 
@@ -134,8 +134,9 @@ static void vnet_recv_work(struct work_struct *work)
 static void vnet_data_ready(struct sock *sk)
 {
     struct vnet_priv *priv = sk->sk_user_data;
-    if (priv)
+    if (priv) {
         schedule_work(&priv->recv_work);
+    }
 }
 
 static int vnet_open(struct net_device *dev)
@@ -214,7 +215,7 @@ static void vnet_setup(struct net_device *dev)
     dev->features &= ~NETIF_F_GRO;
     dev->mtu = 1500 - 28;
 
-    eth_hw_addr_set(dev, vnet_mac_addr);
+    eth_hw_addr_random(dev);
 
     priv = netdev_priv(dev);
     spin_lock_init(&priv->send_lock);
@@ -332,12 +333,14 @@ static void __exit vnet_exit(void)
         sk->sk_data_ready = priv->orig_data_ready;
         sk->sk_user_data = NULL;
         write_unlock_bh(&sk->sk_callback_lock);
-        
-        sock_release(priv->sock);
     }
 
     cancel_work_sync(&priv->send_work);
     cancel_work_sync(&priv->recv_work);
+
+    if (priv->sock) {
+        sock_release(priv->sock);
+    }
 
     free_netdev(vnet_dev);
 
