@@ -13,6 +13,7 @@
 
 #define VNET_NAME "vnet%d"
 #define VNET_SEND_FIFO_SIZE 256
+#define MTU 1472
 
 static char *dest_ip = "158.255.0.70";
 static int dest_port = 69;
@@ -22,8 +23,6 @@ module_param(dest_ip, charp, 0644);
 MODULE_PARM_DESC(dest_ip, "Destination IP address");
 module_param(dest_port, int, 0644);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
-module_param(src_port, int, 0644);
-MODULE_PARM_DESC(src_port, "Source UDP port to listen on");
 
 static struct net_device *vnet_dev;
 
@@ -74,8 +73,9 @@ static void vnet_send_work(struct work_struct *work)
             msg.msg_namelen = sizeof(priv->dest_addr);
 
             int ret = kernel_sendmsg(priv->sock, &msg, &kv, 1, len);
-            if (ret < 0)
+            if (ret < 0) {
                 pr_warn("vnet: kernel_sendmsg failed: %d\n", ret);
+            }
         }
 
         dev_kfree_skb_any(skb);
@@ -86,7 +86,7 @@ static void vnet_recv_work(struct work_struct *work)
 {
     struct vnet_priv *priv = container_of(work, struct vnet_priv, recv_work);
     struct net_device *dev = priv->vnet_dev;
-    char buf[ETH_FRAME_LEN];
+    char buf[MTU];
 
     while (true) {
         if (!netif_running(dev)) {
@@ -105,18 +105,17 @@ static void vnet_recv_work(struct work_struct *work)
             break;
         }
 
-        struct sk_buff *skb = netdev_alloc_skb(dev, len + ETH_HLEN + 2);
+        struct sk_buff *skb = netdev_alloc_skb(dev, len + ETH_HLEN + NET_IP_ALIGN);
         if (!skb) {
             continue;
         }
 
-        skb_reserve(skb, 2);
+        skb_reserve(skb, NET_IP_ALIGN);
 
         struct ethhdr *eth = skb_put(skb, ETH_HLEN);
         memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
-        skb_reset_mac_header(skb);
 
         skb_put_data(skb, buf, len);
 
@@ -213,7 +212,7 @@ static void vnet_setup(struct net_device *dev)
     dev->features &= ~NETIF_F_TSO;
     dev->features &= ~NETIF_F_GSO;
     dev->features &= ~NETIF_F_GRO;
-    dev->mtu = 1500 - 28;
+    dev->mtu = MTU;
 
     eth_hw_addr_random(dev);
 
