@@ -1,6 +1,6 @@
 #include <types.h>
 
-
+#include <linux/compiler.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -39,19 +39,19 @@ static void send_work(struct work_struct *work)
 
     while (true) {
         spin_lock_irqsave(&priv->send_lock, flags);
-        if (!kfifo_get(&priv->send_fifo, &skb)) {
+        if (unlikely(!kfifo_get(&priv->send_fifo, &skb))) {
             spin_unlock_irqrestore(&priv->send_lock, flags);
             break;
         }
         spin_unlock_irqrestore(&priv->send_lock, flags);
 
-        if (skb_linearize(skb)) {
+        if (unlikely(skb_linearize(skb))) {
             pr_warn("tun: skb_linearize failed\n");
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        if (skb->len > ETH_HLEN) {
+        if (likely(skb->len > ETH_HLEN)) {
             int len = skb->len - ETH_HLEN;
 
             kv.iov_base = skb->data + ETH_HLEN;
@@ -61,7 +61,7 @@ static void send_work(struct work_struct *work)
             msg.msg_namelen = sizeof(priv->dest_addr);
 
             int ret = kernel_sendmsg(priv->sock, &msg, &kv, 1, len);
-            if (ret < 0) {
+            if (unlikely(ret < 0)) {
                 pr_warn("tun: kernel_sendmsg failed: %d\n", ret);
             }
         }
@@ -77,7 +77,7 @@ static void recv_work(struct work_struct *work)
     char buf[MTU];
 
     while (true) {
-        if (!netif_running(dev)) {
+        if (unlikely(!netif_running(dev))) {
             break;
         }
 
@@ -89,12 +89,12 @@ static void recv_work(struct work_struct *work)
         kv.iov_len = sizeof(buf);
 
         len = kernel_recvmsg(priv->sock, &msg, &kv, 1, sizeof(buf), MSG_DONTWAIT);
-        if (len <= 0) {
+        if (unlikely(len <= 0)) {
             break;
         }
 
         struct sk_buff *skb = netdev_alloc_skb(dev, len + ETH_HLEN + NET_IP_ALIGN);
-        if (!skb) {
+        if (unlikely(!skb)) {
             continue;
         }
 
@@ -121,7 +121,7 @@ static void recv_work(struct work_struct *work)
 static void data_ready(struct sock *sk)
 {
     struct tun_priv *priv = sk->sk_user_data;
-    if (priv) {
+    if (likely(priv)) {
         schedule_work(&priv->recv_work);
     }
 }
@@ -155,14 +155,14 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
     struct tun_priv *priv = netdev_priv(dev);
     unsigned long flags;
 
-    if (!priv->sock) {
+    if (unlikely(!priv->sock)) {
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
         return NETDEV_TX_OK;
     }
 
     spin_lock_irqsave(&priv->send_lock, flags);
-    if (kfifo_is_full(&priv->send_fifo)) {
+    if (unlikely(kfifo_is_full(&priv->send_fifo))) {
         spin_unlock_irqrestore(&priv->send_lock, flags);
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
@@ -218,7 +218,7 @@ static int init_sock(struct tun_priv *priv)
     struct sock *sk;
 
     err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &priv->sock);
-    if (err) {
+    if (unlikely(err)) {
         pr_err("tun: sock_create failed: %d\n", err);
         return err;
     }
@@ -229,7 +229,7 @@ static int init_sock(struct tun_priv *priv)
     src_addr.sin_port = htons(src_port);
 
     err = kernel_bind(priv->sock, (struct sockaddr *)&src_addr, sizeof(src_addr));
-    if (err) {
+    if (unlikely(err)) {
         pr_err("tun: kernel_bind failed: %d\n", err);
         sock_release(priv->sock);
         priv->sock = NULL;
@@ -259,7 +259,7 @@ static int __init minit(void)
 
     dev = alloc_netdev(sizeof(struct tun_priv), DEV_NAME, NET_NAME_UNKNOWN, setup);
     
-    if (!dev) {
+    if (unlikely(!dev)) {
         pr_err("tun: failed to allocate net device\n");
         return -ENOMEM;
     }
@@ -268,21 +268,21 @@ static int __init minit(void)
     priv->dev = dev;
 
     err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
-    if (err) {
+    if (unlikely(err)) {
         pr_err("tun: failed to allocate send fifo: %d\n", err);
         free_netdev(dev);
         return err;
     }
 
     err = init_sock(priv);
-    if (err) {
+    if (unlikely(err)) {
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
         return err;
     }
 
     err = register_netdev(dev);
-    if (err) {
+    if (unlikely(err)) {
         pr_err("tun: failed to register net device: %d\n", err);
         sock_release(priv->sock);
         kfifo_free(&priv->send_fifo);
@@ -298,7 +298,7 @@ static void __exit mexit(void)
 {
     struct sk_buff *skb;
 
-    if (!dev) {
+    if (unlikely(!dev)) {
         return;
     }
 
@@ -312,7 +312,7 @@ static void __exit mexit(void)
 
     kfifo_free(&priv->send_fifo);
 
-    if (priv->sock) {
+    if (likely(priv->sock)) {
         struct sock* sk = priv->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = priv->orig_data_ready;
@@ -323,7 +323,7 @@ static void __exit mexit(void)
     cancel_work_sync(&priv->send_work);
     cancel_work_sync(&priv->recv_work);
 
-    if (priv->sock) {
+    if (likely(priv->sock)) {
         sock_release(priv->sock);
     }
 
