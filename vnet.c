@@ -1,3 +1,6 @@
+#include <types.h>
+
+
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -11,8 +14,8 @@
 #include <linux/inet.h>
 #include <net/sock.h>
 
-#define VNET_NAME "vnet%d"
-#define VNET_SEND_FIFO_SIZE 256
+#define DEV_NAME "vnet%d"
+#define SEND_FIFO_SIZE 256
 #define MTU 1472
 
 static char *dest_ip = "";
@@ -24,30 +27,15 @@ MODULE_PARM_DESC(dest_ip, "Destination IP address");
 module_param(dest_port, int, 0644);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
 
-static struct net_device *vnet_dev;
+static struct net_device *dev;
 
-struct vnet_priv {
-    struct net_device *vnet_dev;
-
-    struct socket *sock;
-    struct sockaddr_in dest_addr;
-
-    DECLARE_KFIFO_PTR(send_fifo, struct sk_buff *);
-    spinlock_t send_lock;
-    struct work_struct send_work;
-
-    struct work_struct recv_work;
-    void (*orig_data_ready)(struct sock *sk);
-};
-
-static void vnet_send_work(struct work_struct *work)
+static void send_work(struct work_struct *work)
 {
-    struct vnet_priv *priv = container_of(work, struct vnet_priv, send_work);
+    struct tun_priv *priv = container_of(work, struct tun_priv, send_work);
     struct sk_buff *skb;
     struct msghdr msg = {0};
     struct kvec kv;
     unsigned long flags;
-    int len;
 
     while (true) {
         spin_lock_irqsave(&priv->send_lock, flags);
@@ -58,13 +46,13 @@ static void vnet_send_work(struct work_struct *work)
         spin_unlock_irqrestore(&priv->send_lock, flags);
 
         if (skb_linearize(skb)) {
-            pr_warn("vnet: skb_linearize failed\n");
+            pr_warn("tun: skb_linearize failed\n");
             dev_kfree_skb_any(skb);
             continue;
         }
 
         if (skb->len > ETH_HLEN) {
-            len = skb->len - ETH_HLEN;
+            int len = skb->len - ETH_HLEN;
 
             kv.iov_base = skb->data + ETH_HLEN;
             kv.iov_len = len;
@@ -74,7 +62,7 @@ static void vnet_send_work(struct work_struct *work)
 
             int ret = kernel_sendmsg(priv->sock, &msg, &kv, 1, len);
             if (ret < 0) {
-                pr_warn("vnet: kernel_sendmsg failed: %d\n", ret);
+                pr_warn("tun: kernel_sendmsg failed: %d\n", ret);
             }
         }
 
@@ -82,10 +70,10 @@ static void vnet_send_work(struct work_struct *work)
     }
 }
 
-static void vnet_recv_work(struct work_struct *work)
+static void recv_work(struct work_struct *work)
 {
-    struct vnet_priv *priv = container_of(work, struct vnet_priv, recv_work);
-    struct net_device *dev = priv->vnet_dev;
+    struct tun_priv *priv = container_of(work, struct tun_priv, recv_work);
+    struct net_device *dev = priv->dev;
     char buf[MTU];
 
     while (true) {
@@ -130,24 +118,24 @@ static void vnet_recv_work(struct work_struct *work)
     }
 }
 
-static void vnet_data_ready(struct sock *sk)
+static void data_ready(struct sock *sk)
 {
-    struct vnet_priv *priv = sk->sk_user_data;
+    struct tun_priv *priv = sk->sk_user_data;
     if (priv) {
         schedule_work(&priv->recv_work);
     }
 }
 
-static int vnet_open(struct net_device *dev)
+static int open(struct net_device *dev)
 {
     netif_start_queue(dev);
-    pr_info("vnet: device opened\n");
+    pr_info("tun: device opened\n");
     return 0;
 }
 
-static int vnet_stop(struct net_device *dev)
+static int stop(struct net_device *dev)
 {
-    struct vnet_priv *priv = netdev_priv(dev);
+    struct tun_priv *priv = netdev_priv(dev);
     struct sk_buff *skb;
 
     netif_stop_queue(dev);
@@ -158,13 +146,13 @@ static int vnet_stop(struct net_device *dev)
     while (kfifo_get(&priv->send_fifo, &skb))
         dev_kfree_skb_any(skb);
 
-    pr_info("vnet: device stopped\n");
+    pr_info("tun: device stopped\n");
     return 0;
 }
 
-static netdev_tx_t vnet_start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-    struct vnet_priv *priv = netdev_priv(dev);
+    struct tun_priv *priv = netdev_priv(dev);
     unsigned long flags;
 
     if (!priv->sock) {
@@ -178,7 +166,7 @@ static netdev_tx_t vnet_start_xmit(struct sk_buff *skb, struct net_device *dev)
         spin_unlock_irqrestore(&priv->send_lock, flags);
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
-        pr_warn("vnet: send fifo full, tunnel packet dropped\n");
+        pr_warn("tun: send fifo full, tunnel packet dropped\n");
         return NETDEV_TX_OK;
     }
 
@@ -192,19 +180,19 @@ static netdev_tx_t vnet_start_xmit(struct sk_buff *skb, struct net_device *dev)
     return NETDEV_TX_OK;
 }
 
-static const struct net_device_ops vnet_ops = {
-    .ndo_open       = vnet_open,
-    .ndo_stop       = vnet_stop,
-    .ndo_start_xmit = vnet_start_xmit,
+static const struct net_device_ops ops = {
+    .ndo_open       = open,
+    .ndo_stop       = stop,
+    .ndo_start_xmit = start_xmit,
 };
 
-static void vnet_setup(struct net_device *dev)
+static void setup(struct net_device *dev)
 {
-    struct vnet_priv *priv;
+    struct tun_priv *priv;
 
     ether_setup(dev);
 
-    dev->netdev_ops = &vnet_ops;
+    dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
     dev->features &= ~NETIF_F_IP_CSUM;
@@ -219,11 +207,11 @@ static void vnet_setup(struct net_device *dev)
     priv = netdev_priv(dev);
     spin_lock_init(&priv->send_lock);
     INIT_KFIFO(priv->send_fifo);
-    INIT_WORK(&priv->send_work, vnet_send_work);
-    INIT_WORK(&priv->recv_work, vnet_recv_work);
+    INIT_WORK(&priv->send_work, send_work);
+    INIT_WORK(&priv->recv_work, recv_work);
 }
 
-static int vnet_init_sock(struct vnet_priv *priv)
+static int init_sock(struct tun_priv *priv)
 {
     int err;
     struct sockaddr_in src_addr;
@@ -231,7 +219,7 @@ static int vnet_init_sock(struct vnet_priv *priv)
 
     err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &priv->sock);
     if (err) {
-        pr_err("vnet: sock_create failed: %d\n", err);
+        pr_err("tun: sock_create failed: %d\n", err);
         return err;
     }
 
@@ -242,7 +230,7 @@ static int vnet_init_sock(struct vnet_priv *priv)
 
     err = kernel_bind(priv->sock, (struct sockaddr *)&src_addr, sizeof(src_addr));
     if (err) {
-        pr_err("vnet: kernel_bind failed: %d\n", err);
+        pr_err("tun: kernel_bind failed: %d\n", err);
         sock_release(priv->sock);
         priv->sock = NULL;
         return err;
@@ -256,69 +244,67 @@ static int vnet_init_sock(struct vnet_priv *priv)
     sk = priv->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     priv->orig_data_ready = sk->sk_data_ready;
-    sk->sk_data_ready = vnet_data_ready;
+    sk->sk_data_ready = data_ready;
     sk->sk_user_data = priv;
     write_unlock_bh(&sk->sk_callback_lock);
 
-    pr_info("vnet: socket created, bind=0.0.0.0:%d, dest=%s:%d\n", src_port, dest_ip, dest_port);
+    pr_info("tun: socket created, bind=0.0.0.0:%d, dest=%s:%d\n", src_port, dest_ip, dest_port);
     return 0;
 }
 
-static int __init vnet_init(void)
+static int __init minit(void)
 {
-    struct vnet_priv *priv;
+    struct tun_priv *priv;
     int err;
 
-    vnet_dev = alloc_netdev(sizeof(struct vnet_priv), VNET_NAME, NET_NAME_UNKNOWN, vnet_setup);
+    dev = alloc_netdev(sizeof(struct tun_priv), DEV_NAME, NET_NAME_UNKNOWN, setup);
     
-    if (!vnet_dev) {
-        pr_err("vnet: failed to allocate net device\n");
+    if (!dev) {
+        pr_err("tun: failed to allocate net device\n");
         return -ENOMEM;
     }
 
-    priv = netdev_priv(vnet_dev);
-    priv->vnet_dev = vnet_dev;
+    priv = netdev_priv(dev);
+    priv->dev = dev;
 
-    err = kfifo_alloc(&priv->send_fifo, VNET_SEND_FIFO_SIZE, GFP_KERNEL);
+    err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
-        pr_err("vnet: failed to allocate send fifo: %d\n", err);
-        free_netdev(vnet_dev);
+        pr_err("tun: failed to allocate send fifo: %d\n", err);
+        free_netdev(dev);
         return err;
     }
 
-    err = vnet_init_sock(priv);
+    err = init_sock(priv);
     if (err) {
         kfifo_free(&priv->send_fifo);
-        free_netdev(vnet_dev);
+        free_netdev(dev);
         return err;
     }
 
-    err = register_netdev(vnet_dev);
+    err = register_netdev(dev);
     if (err) {
-        pr_err("vnet: failed to register net device: %d\n", err);
+        pr_err("tun: failed to register net device: %d\n", err);
         sock_release(priv->sock);
         kfifo_free(&priv->send_fifo);
-        free_netdev(vnet_dev);
+        free_netdev(dev);
         return err;
     }
 
-    pr_info("vnet: module loaded, device %s registered\n", vnet_dev->name);
+    pr_info("tun: module loaded, device %s registered\n", dev->name);
     return 0;
 }
 
-static void __exit vnet_exit(void)
+static void __exit mexit(void)
 {
-    struct vnet_priv *priv;
     struct sk_buff *skb;
-    struct sock *sk;
 
-    if (!vnet_dev) {
+    if (!dev) {
         return;
     }
 
-    priv = netdev_priv(vnet_dev);
+    struct tun_priv* priv = netdev_priv(dev);
 
-    unregister_netdev(vnet_dev);
+    unregister_netdev(dev);
 
     while (kfifo_get(&priv->send_fifo, &skb)) {
         dev_kfree_skb_any(skb);
@@ -327,7 +313,7 @@ static void __exit vnet_exit(void)
     kfifo_free(&priv->send_fifo);
 
     if (priv->sock) {
-        sk = priv->sock->sk;
+        struct sock* sk = priv->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = priv->orig_data_ready;
         sk->sk_user_data = NULL;
@@ -341,13 +327,13 @@ static void __exit vnet_exit(void)
         sock_release(priv->sock);
     }
 
-    free_netdev(vnet_dev);
+    free_netdev(dev);
 
-    pr_info("vnet: module unloaded\n");
+    pr_info("tun: module unloaded\n");
 }
 
-module_init(vnet_init);
-module_exit(vnet_exit);
+module_init(minit);
+module_exit(mexit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("nlmpx09");
