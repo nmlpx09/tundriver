@@ -6,7 +6,6 @@ struct tun_priv {
     struct net_device *dev;
 
     struct socket *sock;
-    struct sockaddr_in dest_addr;
 
     DECLARE_KFIFO_PTR(send_fifo, struct sk_buff *);
     spinlock_t send_lock;

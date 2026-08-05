@@ -1,6 +1,7 @@
 #include <types.h>
 
 #include <linux/compiler.h>
+#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -18,7 +19,7 @@
 #define SEND_FIFO_SIZE 256
 #define MTU 1472
 
-static char *dest_ip = "";
+static char* dest_ip = "";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -27,12 +28,12 @@ MODULE_PARM_DESC(dest_ip, "Destination IP address");
 module_param(dest_port, int, 0644);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
 
-static struct net_device *dev;
+static struct net_device* dev;
 
-static void send_work(struct work_struct *work)
+static void send_work(struct work_struct* work)
 {
-    struct tun_priv *priv = container_of(work, struct tun_priv, send_work);
-    struct sk_buff *skb;
+    struct tun_priv* priv = container_of(work, struct tun_priv, send_work);
+    struct sk_buff* skb;
     struct msghdr msg = {0};
     struct kvec kv;
     unsigned long flags;
@@ -57,8 +58,15 @@ static void send_work(struct work_struct *work)
             kv.iov_base = skb->data + ETH_HLEN;
             kv.iov_len = len;
 
-            msg.msg_name = &priv->dest_addr;
-            msg.msg_namelen = sizeof(priv->dest_addr);
+            struct sockaddr_in dest_addr;
+
+            msg.msg_name = &dest_addr;
+            msg.msg_namelen = sizeof(dest_addr);
+
+            memset(&dest_addr, 0, sizeof(dest_addr));
+            dest_addr.sin_family = AF_INET;
+            dest_addr.sin_port = htons(dest_port);
+            dest_addr.sin_addr.s_addr = in_aton(dest_ip);
 
             int ret = kernel_sendmsg(priv->sock, &msg, &kv, 1, len);
             if (unlikely(ret < 0)) {
@@ -70,10 +78,10 @@ static void send_work(struct work_struct *work)
     }
 }
 
-static void recv_work(struct work_struct *work)
+static void recv_work(struct work_struct* work)
 {
-    struct tun_priv *priv = container_of(work, struct tun_priv, recv_work);
-    struct net_device *dev = priv->dev;
+    struct tun_priv* priv = container_of(work, struct tun_priv, recv_work);
+    struct net_device* dev = priv->dev;
     char buf[MTU];
 
     while (true) {
@@ -93,14 +101,14 @@ static void recv_work(struct work_struct *work)
             break;
         }
 
-        struct sk_buff *skb = netdev_alloc_skb(dev, len + ETH_HLEN + NET_IP_ALIGN);
+        struct sk_buff* skb = netdev_alloc_skb(dev, len + ETH_HLEN + NET_IP_ALIGN);
         if (unlikely(!skb)) {
             continue;
         }
 
         skb_reserve(skb, NET_IP_ALIGN);
 
-        struct ethhdr *eth = skb_put(skb, ETH_HLEN);
+        struct ethhdr* eth = skb_put(skb, ETH_HLEN);
         memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
@@ -118,25 +126,25 @@ static void recv_work(struct work_struct *work)
     }
 }
 
-static void data_ready(struct sock *sk)
+static void data_ready(struct sock* sk)
 {
-    struct tun_priv *priv = sk->sk_user_data;
+    struct tun_priv* priv = sk->sk_user_data;
     if (likely(priv)) {
         schedule_work(&priv->recv_work);
     }
 }
 
-static int open(struct net_device *dev)
+static int open(struct net_device* dev)
 {
     netif_start_queue(dev);
     pr_info("tun: device opened\n");
     return 0;
 }
 
-static int stop(struct net_device *dev)
+static int stop(struct net_device* dev)
 {
-    struct tun_priv *priv = netdev_priv(dev);
-    struct sk_buff *skb;
+    struct tun_priv* priv = netdev_priv(dev);
+    struct sk_buff* skb;
 
     netif_stop_queue(dev);
 
@@ -150,10 +158,9 @@ static int stop(struct net_device *dev)
     return 0;
 }
 
-static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
+static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
 {
-    struct tun_priv *priv = netdev_priv(dev);
-    unsigned long flags;
+    struct tun_priv* priv = netdev_priv(dev);
 
     if (unlikely(!priv->sock)) {
         dev_kfree_skb_any(skb);
@@ -161,6 +168,7 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
         return NETDEV_TX_OK;
     }
 
+    unsigned long flags;
     spin_lock_irqsave(&priv->send_lock, flags);
     if (unlikely(kfifo_is_full(&priv->send_fifo))) {
         spin_unlock_irqrestore(&priv->send_lock, flags);
@@ -186,9 +194,9 @@ static const struct net_device_ops ops = {
     .ndo_start_xmit = start_xmit,
 };
 
-static void setup(struct net_device *dev)
+static void setup(struct net_device* dev)
 {
-    struct tun_priv *priv;
+    struct tun_priv* priv;
 
     ether_setup(dev);
 
@@ -211,78 +219,60 @@ static void setup(struct net_device *dev)
     INIT_WORK(&priv->recv_work, recv_work);
 }
 
-static int init_sock(struct tun_priv *priv)
+static struct socket* init_sock(void)
 {
-    int err;
-    struct sockaddr_in src_addr;
-    struct sock *sk;
+    struct socket* sock;
 
-    err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &priv->sock);
-    if (unlikely(err)) {
+    int err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+    if (err) {
         pr_err("tun: sock_create failed: %d\n", err);
-        return err;
+        return ERR_PTR(err);
     }
 
+    struct sockaddr_in src_addr;
     memset(&src_addr, 0, sizeof(src_addr));
     src_addr.sin_family = AF_INET;
     src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     src_addr.sin_port = htons(src_port);
 
-    err = kernel_bind(priv->sock, (struct sockaddr *)&src_addr, sizeof(src_addr));
-    if (unlikely(err)) {
+    err = kernel_bind(sock, (struct sockaddr*)&src_addr, sizeof(src_addr));
+    if (err) {
         pr_err("tun: kernel_bind failed: %d\n", err);
-        sock_release(priv->sock);
-        priv->sock = NULL;
-        return err;
+        sock_release(sock);
+        return ERR_PTR(err);
     }
 
-    memset(&priv->dest_addr, 0, sizeof(priv->dest_addr));
-    priv->dest_addr.sin_family = AF_INET;
-    priv->dest_addr.sin_port = htons(dest_port);
-    priv->dest_addr.sin_addr.s_addr = in_aton(dest_ip);
-
-    sk = priv->sock->sk;
-    write_lock_bh(&sk->sk_callback_lock);
-    priv->orig_data_ready = sk->sk_data_ready;
-    sk->sk_data_ready = data_ready;
-    sk->sk_user_data = priv;
-    write_unlock_bh(&sk->sk_callback_lock);
-
-    pr_info("tun: socket created, bind=0.0.0.0:%d, dest=%s:%d\n", src_port, dest_ip, dest_port);
-    return 0;
+    return sock;
 }
 
 static int __init minit(void)
 {
-    struct tun_priv *priv;
-    int err;
-
     dev = alloc_netdev(sizeof(struct tun_priv), DEV_NAME, NET_NAME_UNKNOWN, setup);
     
-    if (unlikely(!dev)) {
+    if (!dev) {
         pr_err("tun: failed to allocate net device\n");
         return -ENOMEM;
     }
 
-    priv = netdev_priv(dev);
+    struct tun_priv* priv = netdev_priv(dev);
     priv->dev = dev;
 
-    err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
-    if (unlikely(err)) {
+    int err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    if (err) {
         pr_err("tun: failed to allocate send fifo: %d\n", err);
         free_netdev(dev);
         return err;
     }
 
-    err = init_sock(priv);
-    if (unlikely(err)) {
+    priv->sock = init_sock();
+    if (IS_ERR(priv->sock)) {
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
-        return err;
+        return PTR_ERR(priv->sock);
     }
 
     err = register_netdev(dev);
-    if (unlikely(err)) {
+    if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
         sock_release(priv->sock);
         kfifo_free(&priv->send_fifo);
@@ -290,15 +280,20 @@ static int __init minit(void)
         return err;
     }
 
+    struct sock* sk = priv->sock->sk;
+    write_lock_bh(&sk->sk_callback_lock);
+    priv->orig_data_ready = sk->sk_data_ready;
+    sk->sk_data_ready = data_ready;
+    sk->sk_user_data = priv;
+    write_unlock_bh(&sk->sk_callback_lock);
+
     pr_info("tun: module loaded, device %s registered\n", dev->name);
     return 0;
 }
 
 static void __exit mexit(void)
 {
-    struct sk_buff *skb;
-
-    if (unlikely(!dev)) {
+    if (!dev) {
         return;
     }
 
@@ -306,13 +301,12 @@ static void __exit mexit(void)
 
     unregister_netdev(dev);
 
+    struct sk_buff* skb;
     while (kfifo_get(&priv->send_fifo, &skb)) {
         dev_kfree_skb_any(skb);
     }
 
-    kfifo_free(&priv->send_fifo);
-
-    if (likely(priv->sock)) {
+    if (priv->sock) {
         struct sock* sk = priv->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = priv->orig_data_ready;
@@ -323,7 +317,9 @@ static void __exit mexit(void)
     cancel_work_sync(&priv->send_work);
     cancel_work_sync(&priv->recv_work);
 
-    if (likely(priv->sock)) {
+    kfifo_free(&priv->send_fifo);
+
+    if (priv->sock) {
         sock_release(priv->sock);
     }
 
