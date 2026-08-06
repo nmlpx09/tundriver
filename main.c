@@ -47,7 +47,10 @@ static void send_work(struct work_struct* work)
         }
 
         if (likely(skb->len > ETH_HLEN)) {
-            sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, in_aton(dest_ip), htons(dest_port));
+            int ret = sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, in_aton(dest_ip), htons(dest_port));
+            if (unlikely(ret < 0)) {
+                pr_warn("tun: sock_write failed: %d\n", ret);
+            }
         }
 
         dev_kfree_skb_any(skb);
@@ -66,7 +69,10 @@ static void recv_work(struct work_struct* work)
         }
 
         int len = sock_read(priv->sock, buf, sizeof(buf));
-        if (unlikely(len <= 0)) {
+        if (unlikely(len < 0)) {
+            pr_warn("tun: sock_read failed: %d\n", len);
+            break;
+        } else if (unlikely(len == 0)) {
             break;
         }
 
@@ -209,9 +215,11 @@ static int __init minit(void)
 
     priv->sock = sock_init(htons(src_port));
     if (IS_ERR(priv->sock)) {
+        int err = PTR_ERR(priv->sock);
+        pr_err("tun: sock_init failed: %d\n", err);
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
-        return PTR_ERR(priv->sock);
+        return err;
     }
 
     err = register_netdev(dev);
