@@ -47,7 +47,7 @@ static void send_work(struct work_struct* work)
         }
 
         if (likely(skb->len > ETH_HLEN)) {
-            int ret = sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, in_aton(dest_ip), htons(dest_port));
+            int ret = sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, priv->dest.ip, priv->dest.port);
             if (unlikely(ret < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", ret);
             }
@@ -221,6 +221,9 @@ static int __init minit(void)
         free_netdev(dev);
         return err;
     }
+
+    priv->dest.ip = in_aton(dest_ip);
+    priv->dest.port = htons(dest_port);
 
     err = register_netdev(dev);
     if (err) {

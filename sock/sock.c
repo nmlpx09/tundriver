@@ -29,15 +29,14 @@ struct socket* sock_init(__be16 port)
     }
 
     int buffer_size = SOCKET_BUFFER_SIZE;
-    unsigned int optlen = sizeof(buffer_size);
 
-    err = sock_setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, KERNEL_SOCKPTR(&buffer_size), optlen);
+    err = sock_setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
     if (unlikely(err)) {
         sock_release(sock);
         return ERR_PTR(err);
     }
 
-    err = sock_setsockopt(sock, SOL_SOCKET, SO_SNDBUFFORCE, KERNEL_SOCKPTR(&buffer_size), optlen);
+    err = sock_setsockopt(sock, SOL_SOCKET, SO_SNDBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
     if (unlikely(err)) {
         sock_release(sock);
         return ERR_PTR(err);
