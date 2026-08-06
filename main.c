@@ -14,7 +14,7 @@
 #define SEND_FIFO_SIZE 256
 #define MTU 1472
 
-static char* dest_ip = "158.255.0.70";
+static char* dest_ip = "";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -217,7 +217,7 @@ static int __init minit(void)
     err = register_netdev(dev);
     if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
-        sock_release(priv->sock);
+        sock_close(priv->sock);
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
         return err;
