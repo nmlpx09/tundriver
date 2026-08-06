@@ -1,6 +1,8 @@
 obj-m += vnet.o
 
-ccflags-y += -I$(src)
+vnet-y := main.o sock/sock.o
+
+ccflags-y += -I$(src) -I$(src)/sock
 
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)

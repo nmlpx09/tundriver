@@ -1,25 +1,20 @@
-#include <types.h>
-
-#include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/module.h>
-#include <linux/netdevice.h>
 #include <linux/etherdevice.h>
-#include <linux/skbuff.h>
-#include <linux/if_arp.h>
-#include <linux/kfifo.h>
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
-#include <linux/net.h>
-#include <linux/socket.h>
 #include <linux/inet.h>
 #include <net/sock.h>
+
+#include "types.h"
+
+#include <sock/sock.h>
 
 #define DEV_NAME "vnet%d"
 #define SEND_FIFO_SIZE 256
 #define MTU 1472
 
-static char* dest_ip = "";
+static char* dest_ip = "158.255.0.70";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -34,8 +29,7 @@ static void send_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, send_work);
     struct sk_buff* skb;
-    struct msghdr msg = {0};
-    struct kvec kv;
+
     unsigned long flags;
 
     while (true) {
@@ -53,25 +47,7 @@ static void send_work(struct work_struct* work)
         }
 
         if (likely(skb->len > ETH_HLEN)) {
-            int len = skb->len - ETH_HLEN;
-
-            kv.iov_base = skb->data + ETH_HLEN;
-            kv.iov_len = len;
-
-            struct sockaddr_in dest_addr;
-
-            msg.msg_name = &dest_addr;
-            msg.msg_namelen = sizeof(dest_addr);
-
-            memset(&dest_addr, 0, sizeof(dest_addr));
-            dest_addr.sin_family = AF_INET;
-            dest_addr.sin_port = htons(dest_port);
-            dest_addr.sin_addr.s_addr = in_aton(dest_ip);
-
-            int ret = kernel_sendmsg(priv->sock, &msg, &kv, 1, len);
-            if (unlikely(ret < 0)) {
-                pr_warn("tun: kernel_sendmsg failed: %d\n", ret);
-            }
+            sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, in_aton(dest_ip), htons(dest_port));
         }
 
         dev_kfree_skb_any(skb);
@@ -89,14 +65,7 @@ static void recv_work(struct work_struct* work)
             break;
         }
 
-        struct msghdr msg = {0};
-        struct kvec kv;
-        int len;
-
-        kv.iov_base = buf;
-        kv.iov_len = sizeof(buf);
-
-        len = kernel_recvmsg(priv->sock, &msg, &kv, 1, sizeof(buf), MSG_DONTWAIT);
+        int len = sock_read(priv->sock, buf, sizeof(buf));
         if (unlikely(len <= 0)) {
             break;
         }
@@ -219,32 +188,6 @@ static void setup(struct net_device* dev)
     INIT_WORK(&priv->recv_work, recv_work);
 }
 
-static struct socket* init_sock(void)
-{
-    struct socket* sock;
-
-    int err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
-    if (err) {
-        pr_err("tun: sock_create failed: %d\n", err);
-        return ERR_PTR(err);
-    }
-
-    struct sockaddr_in src_addr;
-    memset(&src_addr, 0, sizeof(src_addr));
-    src_addr.sin_family = AF_INET;
-    src_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    src_addr.sin_port = htons(src_port);
-
-    err = kernel_bind(sock, (struct sockaddr*)&src_addr, sizeof(src_addr));
-    if (err) {
-        pr_err("tun: kernel_bind failed: %d\n", err);
-        sock_release(sock);
-        return ERR_PTR(err);
-    }
-
-    return sock;
-}
-
 static int __init minit(void)
 {
     dev = alloc_netdev(sizeof(struct tun_priv), DEV_NAME, NET_NAME_UNKNOWN, setup);
@@ -264,7 +207,7 @@ static int __init minit(void)
         return err;
     }
 
-    priv->sock = init_sock();
+    priv->sock = sock_init(htons(src_port));
     if (IS_ERR(priv->sock)) {
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
@@ -320,7 +263,7 @@ static void __exit mexit(void)
     kfifo_free(&priv->send_fifo);
 
     if (priv->sock) {
-        sock_release(priv->sock);
+        sock_close(priv->sock);
     }
 
     free_netdev(dev);
