@@ -1,8 +1,8 @@
 obj-m += vnet.o
 
-vnet-y := main.o sock/sock.o
+vnet-y := main.o sock/impl.o crypt/impl.o
 
-ccflags-y += -I$(src) -I$(src)/sock
+ccflags-y += -I$(src) -I$(src)/sock -I$(src)/crypt
 
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)

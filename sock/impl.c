@@ -1,11 +1,15 @@
-#include "sock.h"
-
 #include <linux/net.h>
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/sockptr.h>
 #include <net/sock.h>
 #include <net/net_namespace.h>
+
+#include "impl.h"
+
+#include <configs.h>
+
+static unchar read_buffer[MAX_BUFFER_SIZE];
 
 struct socket* sock_init(__be16 port)
 {
@@ -88,23 +92,22 @@ int sock_write(struct socket *sock, void* data, size_t len, __be32 ip, __be16 po
     return ret;
 }
 
-int sock_read(struct socket *sock, void* data, size_t len)
+struct read_result sock_read(struct socket *sock)
 {
+    struct read_result res = {.buf = read_buffer, .len = 0};
+
     if (unlikely(!sock)) {
-        return -EINVAL;
+        return res;
     }
 
     struct kvec kv;
 
-    kv.iov_base = data;
-    kv.iov_len = len;
+    kv.iov_base = read_buffer;
+    kv.iov_len = sizeof(read_buffer);
 
     struct msghdr msg = {0};
-    int ret = kernel_recvmsg(sock, &msg, &kv, 1, len, MSG_DONTWAIT);
+    int ret = kernel_recvmsg(sock, &msg, &kv, 1, sizeof(read_buffer), MSG_DONTWAIT);
 
-    if (unlikely(ret == -EAGAIN)) {
-        return 0;
-    }
-
-    return ret;
+    res.len = ret;
+    return res;
 }

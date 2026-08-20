@@ -6,13 +6,13 @@
 #include <linux/inet.h>
 #include <net/sock.h>
 
+#include <crypt/impl.h>
+#include <sock/impl.h>
+
+#include "configs.h"
 #include "types.h"
 
-#include <sock/sock.h>
-
 #define DEV_NAME "vnet%d"
-#define SEND_FIFO_SIZE 256
-#define MTU 1472
 
 static char* dest_ip = "";
 static int dest_port = 69;
@@ -47,7 +47,15 @@ static void send_work(struct work_struct* work)
         }
 
         if (likely(skb->len > ETH_HLEN)) {
-            int ret = sock_write(priv->sock, skb->data + ETH_HLEN, skb->len - ETH_HLEN, priv->dest.ip, priv->dest.port);
+            struct crypt_result encr = encrypt(skb->data + ETH_HLEN, skb->len - ETH_HLEN);
+
+            if (unlikely(encr.len == 0)) {
+                pr_warn("tun: decrypt failed");
+                continue;
+            }
+
+            int ret = sock_write(priv->sock, encr.buf, encr.len, priv->dest.ip, priv->dest.port);
+
             if (unlikely(ret < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", ret);
             }
@@ -61,22 +69,28 @@ static void recv_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, recv_work);
     struct net_device* dev = priv->dev;
-    char buf[MTU];
 
     while (true) {
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        int len = sock_read(priv->sock, buf, sizeof(buf));
-        if (unlikely(len < 0)) {
-            pr_warn("tun: sock_read failed: %d\n", len);
+        struct read_result readr = sock_read(priv->sock);
+        if (unlikely(readr.len < 0)) {
+            pr_warn("tun: sock_read failed: %d\n", readr.len);
             break;
-        } else if (unlikely(len == 0)) {
+        } else if (unlikely(readr.len == 0)) {
             break;
         }
 
-        struct sk_buff* skb = netdev_alloc_skb(dev, len + ETH_HLEN + NET_IP_ALIGN);
+        struct crypt_result decr = decrypt(readr.buf, readr.len);
+
+        if (unlikely(decr.len == 0)) {
+            pr_warn("tun: encrypt failed");
+            break;
+        }
+
+        struct sk_buff* skb = netdev_alloc_skb(dev, decr.len + ETH_HLEN + NET_IP_ALIGN);
         if (unlikely(!skb)) {
             continue;
         }
@@ -88,7 +102,7 @@ static void recv_work(struct work_struct* work)
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
 
-        skb_put_data(skb, buf, len);
+        skb_put_data(skb, decr.buf, decr.len);
 
         skb->dev = dev;
         skb->protocol = eth_type_trans(skb, dev);
