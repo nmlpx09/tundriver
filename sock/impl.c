@@ -57,7 +57,7 @@ void sock_close(struct socket *sock)
     sock_release(sock);
 }
 
-int sock_write(struct socket *sock, void* data, size_t len, __be32 ip, __be16 port)
+int sock_write(struct socket *sock, unchar* data, size_t len, __be32 ip, __be16 port)
 {
     if (unlikely(!sock)) {
         return -EINVAL;
@@ -105,9 +105,24 @@ struct read_result sock_read(struct socket *sock)
     kv.iov_base = read_buffer;
     kv.iov_len = sizeof(read_buffer);
 
-    struct msghdr msg = {0};
+    struct sockaddr_in src_addr = {0};
+    struct msghdr msg = {
+        .msg_name = &src_addr,
+        .msg_namelen = sizeof(src_addr)
+    };
+
     int ret = kernel_recvmsg(sock, &msg, &kv, 1, sizeof(read_buffer), MSG_DONTWAIT);
 
-    res.len = ret;
+    if (likely(ret > 0)) {
+        res.ip = src_addr.sin_addr.s_addr;
+        res.port = src_addr.sin_port;
+    }
+
+    if (unlikely(ret == -EAGAIN || ret == -EWOULDBLOCK)) {
+        res.len = 0;
+    } else {
+        res.len = ret;
+    }
+
     return res;
 }

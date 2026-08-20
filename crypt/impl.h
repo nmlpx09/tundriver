@@ -6,7 +6,7 @@
 #include <configs.h>
 
 struct crypt_result {
-    void* buf;
+    unchar* buf;
     size_t len;
 };
 

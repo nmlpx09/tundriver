@@ -8,13 +8,14 @@
 
 #include <crypt/impl.h>
 #include <sock/impl.h>
+#include <utils/impl.h>
 
 #include "configs.h"
 #include "types.h"
 
 #define DEV_NAME "vnet%d"
 
-static char* dest_ip = "";
+static char* dest_ip = "66.248.207.187";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -47,10 +48,21 @@ static void send_work(struct work_struct* work)
         }
 
         if (likely(skb->len > ETH_HLEN)) {
-            struct crypt_result encr = encrypt(skb->data + ETH_HLEN, skb->len - ETH_HLEN);
+
+            unchar* buf = skb->data + ETH_HLEN;
+            size_t len = skb->len - ETH_HLEN;
+
+            if (unlikely(!valid_ipv4_packet(buf, len))) {
+                pr_warn("tun: not valid ipv4 packet\n");
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
+            struct crypt_result encr = encrypt(buf, len);
 
             if (unlikely(encr.len == 0)) {
-                pr_warn("tun: decrypt failed");
+                pr_warn("tun: encrypt failed");
+                dev_kfree_skb_any(skb);
                 continue;
             }
 
@@ -86,8 +98,13 @@ static void recv_work(struct work_struct* work)
         struct crypt_result decr = decrypt(readr.buf, readr.len);
 
         if (unlikely(decr.len == 0)) {
-            pr_warn("tun: encrypt failed");
-            break;
+            pr_warn("tun: decrypt failed");
+            continue;
+        }
+
+        if (unlikely(!valid_ipv4_packet(decr.buf, decr.len))) {
+            pr_warn("tun: not valid ipv4 packet\n");
+            continue;
         }
 
         struct sk_buff* skb = netdev_alloc_skb(dev, decr.len + ETH_HLEN + NET_IP_ALIGN);
@@ -117,9 +134,11 @@ static void recv_work(struct work_struct* work)
 
 static void data_ready(struct sock* sk)
 {
-    struct tun_priv* priv = sk->sk_user_data;
-    if (likely(priv)) {
-        schedule_work(&priv->recv_work);
+    if (likely(sk)) {
+        struct tun_priv* priv = sk->sk_user_data;
+        if (likely(priv)) {
+            schedule_work(&priv->recv_work);
+        }
     }
 }
 
