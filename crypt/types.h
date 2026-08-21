@@ -3,9 +3,9 @@
 
 struct crypt_data {
     size_t mbs;
-    unchar* encrb;
+    u8* encrb;
     size_t encrbl;
-    unchar* decrb;
+    u8* decrb;
     size_t decrbl;
 };
 

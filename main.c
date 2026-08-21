@@ -29,12 +29,17 @@ static struct net_device* dev;
 static void send_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, send_work);
+    struct sock_data* sd = priv->sd;
     struct crypt_data* cd = priv->cd;
     struct sk_buff* skb;
 
     unsigned long flags;
 
     while (true) {
+        if (unlikely(!sd || !cd)) {
+            break;
+        }
+
         spin_lock_irqsave(&priv->send_lock, flags);
         if (unlikely(!kfifo_get(&priv->send_fifo, &skb))) {
             spin_unlock_irqrestore(&priv->send_lock, flags);
@@ -63,7 +68,7 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            int ret = sock_write(priv->sd, cd->encrb, cd->encrbl, priv->dest.ip, priv->dest.port);
+            int ret = sock_write(sd, cd->encrb, cd->encrbl, priv->dest.ip, priv->dest.port);
 
             if (unlikely(ret < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", ret);
@@ -82,7 +87,7 @@ static void recv_work(struct work_struct* work)
     struct crypt_data* cd = priv->cd;
 
     while (true) {
-        if (unlikely(!netif_running(dev))) {
+        if (unlikely(!netif_running(dev) || !sd || !cd)) {
             break;
         }
 
@@ -229,6 +234,7 @@ static void setup(struct net_device* dev)
 
 static int __init minit(void)
 {
+    int err;
     dev = alloc_netdev(sizeof(struct tun_priv), DEV_NAME, NET_NAME_UNKNOWN, setup);
     
     if (!dev) {
@@ -239,19 +245,11 @@ static int __init minit(void)
     struct tun_priv* priv = netdev_priv(dev);
     priv->dev = dev;
 
-    int err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
-    if (err) {
-        pr_err("tun: failed to allocate send fifo: %d\n", err);
-        free_netdev(dev);
-        return err;
-    }
-
     priv->sd = sock_init(htons(src_port));
 
     if (IS_ERR(priv->sd)) {
         err = PTR_ERR(priv->sd);
         pr_err("tun: sock_init failed: %d\n", err);
-        kfifo_free(&priv->send_fifo);
         free_netdev(dev);
         return err;
     }
@@ -261,9 +259,17 @@ static int __init minit(void)
     if (IS_ERR(priv->cd)) {
         err = PTR_ERR(priv->cd);
         pr_err("tun: crypt_init failed: %d\n", err);
-        sock_close(priv->sd);
-        kfifo_free(&priv->send_fifo);
         free_netdev(dev);
+        sock_close(priv->sd);
+        return err;
+    }
+
+    err = kfifo_alloc(&priv->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    if (err) {
+        pr_err("tun: failed to allocate send fifo: %d\n", err);
+        free_netdev(dev);
+        sock_close(priv->sd);
+        crypt_close(priv->cd);
         return err;
     }
 
@@ -273,10 +279,10 @@ static int __init minit(void)
     err = register_netdev(dev);
     if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
+        free_netdev(dev);
         sock_close(priv->sd);
         crypt_close(priv->cd);
         kfifo_free(&priv->send_fifo);
-        free_netdev(dev);
         return err;
     }
 
@@ -301,13 +307,13 @@ static void __exit mexit(void)
 
     unregister_netdev(dev);
 
+    cancel_work_sync(&priv->send_work);
+    cancel_work_sync(&priv->recv_work);
+
     struct sk_buff* skb;
     while (kfifo_get(&priv->send_fifo, &skb)) {
         dev_kfree_skb_any(skb);
     }
-
-    cancel_work_sync(&priv->send_work);
-    cancel_work_sync(&priv->recv_work);
 
     if (priv->sd && priv->sd->sock) {
         struct sock* sk = priv->sd->sock->sk;

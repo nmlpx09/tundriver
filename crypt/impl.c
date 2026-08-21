@@ -47,7 +47,7 @@ void crypt_close(struct crypt_data* cd)
     kfree(cd);
 }
 
-void encrypt(struct crypt_data* cd, unchar* buf, size_t len)
+void encrypt(struct crypt_data* cd, u8* buf, size_t len)
 {
     if (unlikely(!cd || !cd->encrb)) {
         return;
@@ -57,7 +57,7 @@ void encrypt(struct crypt_data* cd, unchar* buf, size_t len)
         return;
     }
 
-    unchar* encrb = cd->encrb;
+    u8* encrb = cd->encrb;
     size_t res_len = 0;
 
     for (; res_len < len; ++res_len) {
@@ -68,7 +68,7 @@ void encrypt(struct crypt_data* cd, unchar* buf, size_t len)
     return;
 }
 
-void decrypt(struct crypt_data* cd, unchar* buf, size_t len)
+void decrypt(struct crypt_data* cd, u8* buf, size_t len)
 {
     if (unlikely(!cd || !cd->decrb)) {
         return;
@@ -78,7 +78,7 @@ void decrypt(struct crypt_data* cd, unchar* buf, size_t len)
         return;
     }
 
-    unchar* decrb = cd->decrb;
+    u8* decrb = cd->decrb;
     size_t res_len = 0;
 
     for (; res_len < len; ++res_len) {
