@@ -15,7 +15,7 @@
 
 #define DEV_NAME "vnet%d"
 
-static char* dest_ip = "66.248.207.187";
+static char* dest_ip = "";
 static int dest_port = 69;
 static int src_port = 0;
 
@@ -66,7 +66,7 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            int ret = sock_write(priv->sock, encr.buf, encr.len, priv->dest.ip, priv->dest.port);
+            int ret = sock_write(priv->sd, encr.buf, encr.len, priv->dest.ip, priv->dest.port);
 
             if (unlikely(ret < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", ret);
@@ -81,21 +81,26 @@ static void recv_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, recv_work);
     struct net_device* dev = priv->dev;
+    struct sock_data* sd = priv->sd;
 
     while (true) {
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        struct read_result readr = sock_read(priv->sock);
-        if (unlikely(readr.len < 0)) {
-            pr_warn("tun: sock_read failed: %d\n", readr.len);
+        sock_read(sd);
+
+        unchar* readb = sd->readb;
+        int readbl = sd->readbl;
+
+        if (unlikely(readbl < 0)) {
+            pr_warn("tun: sock_read failed: %d\n", readbl);
             break;
-        } else if (unlikely(readr.len == 0)) {
+        } else if (unlikely(readbl == 0)) {
             break;
         }
 
-        struct crypt_result decr = decrypt(readr.buf, readr.len);
+        struct crypt_result decr = decrypt(readb, readbl);
 
         if (unlikely(decr.len == 0)) {
             pr_warn("tun: decrypt failed");
@@ -170,7 +175,7 @@ static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_priv* priv = netdev_priv(dev);
 
-    if (unlikely(!priv->sock)) {
+    if (unlikely(!priv->sd)) {
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
         return NETDEV_TX_OK;
@@ -186,11 +191,13 @@ static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
         return NETDEV_TX_OK;
     }
 
+    kfifo_put(&priv->send_fifo, skb);
+
+    spin_unlock_irqrestore(&priv->send_lock, flags);
+
     dev->stats.tx_packets++;
     dev->stats.tx_bytes += skb->len;
 
-    kfifo_put(&priv->send_fifo, skb);
-    spin_unlock_irqrestore(&priv->send_lock, flags);
     schedule_work(&priv->send_work);
 
     return NETDEV_TX_OK;
@@ -246,9 +253,9 @@ static int __init minit(void)
         return err;
     }
 
-    priv->sock = sock_init(htons(src_port));
-    if (IS_ERR(priv->sock)) {
-        int err = PTR_ERR(priv->sock);
+    priv->sd = sock_init(htons(src_port));
+    if (IS_ERR(priv->sd)) {
+        int err = PTR_ERR(priv->sd);
         pr_err("tun: sock_init failed: %d\n", err);
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
@@ -261,13 +268,13 @@ static int __init minit(void)
     err = register_netdev(dev);
     if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
-        sock_close(priv->sock);
+        sock_close(priv->sd);
         kfifo_free(&priv->send_fifo);
         free_netdev(dev);
         return err;
     }
 
-    struct sock* sk = priv->sock->sk;
+    struct sock* sk = priv->sd->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     priv->orig_data_ready = sk->sk_data_ready;
     sk->sk_data_ready = data_ready;
@@ -293,8 +300,8 @@ static void __exit mexit(void)
         dev_kfree_skb_any(skb);
     }
 
-    if (priv->sock) {
-        struct sock* sk = priv->sock->sk;
+    if (priv->sd && priv->sd->sock) {
+        struct sock* sk = priv->sd->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = priv->orig_data_ready;
         sk->sk_user_data = NULL;
@@ -306,8 +313,8 @@ static void __exit mexit(void)
 
     kfifo_free(&priv->send_fifo);
 
-    if (priv->sock) {
-        sock_close(priv->sock);
+    if (priv->sd) {
+        sock_close(priv->sd);
     }
 
     free_netdev(dev);

@@ -9,14 +9,22 @@
 
 #include <configs.h>
 
-static unchar read_buffer[MAX_BUFFER_SIZE];
-
-struct socket* sock_init(__be16 port)
+struct sock_data* sock_init(__be16 port)
 {
+    struct sock_data* res = kmalloc(sizeof(struct sock_data), GFP_KERNEL);
+
+    res->sock = NULL;
+    res->readb = NULL;
+    res->readbl = -1;
+    res->sip = 0;
+    res->sport = 0;
+    res->mbs = MAX_BUFFER_SIZE;
+
     struct socket* sock;
 
     int err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
     if (err) {
+        kfree(res);
         return ERR_PTR(err);
     }
 
@@ -29,6 +37,7 @@ struct socket* sock_init(__be16 port)
     err = kernel_bind(sock, (struct sockaddr*)&src_addr, sizeof(src_addr));
     if (err) {
         sock_release(sock);
+        kfree(res);
         return ERR_PTR(err);
     }
 
@@ -37,29 +46,37 @@ struct socket* sock_init(__be16 port)
     err = sock_setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
     if (unlikely(err)) {
         sock_release(sock);
+        kfree(res);
         return ERR_PTR(err);
     }
 
     err = sock_setsockopt(sock, SOL_SOCKET, SO_SNDBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
     if (unlikely(err)) {
         sock_release(sock);
+        kfree(res);
         return ERR_PTR(err);
     }
 
-    return sock;
+    res->sock = sock;
+    res->readb = kmalloc(res->mbs, GFP_KERNEL);
+
+    return res;
 }
 
-void sock_close(struct socket *sock)
+void sock_close(struct sock_data* sd)
 {
-    if (unlikely(!sock)) {
+    if (!sd) {
         return;
     }
-    sock_release(sock);
+    sock_release(sd->sock);
+
+    kfree(sd->readb);
+    kfree(sd);
 }
 
-int sock_write(struct socket *sock, unchar* data, size_t len, __be32 ip, __be16 port)
+int sock_write(struct sock_data* sd, unchar* data, size_t len, __be32 ip, __be16 port)
 {
-    if (unlikely(!sock)) {
+    if (unlikely(!sd || !sd->sock)) {
         return -EINVAL;
     }
 
@@ -79,7 +96,7 @@ int sock_write(struct socket *sock, unchar* data, size_t len, __be32 ip, __be16 
         .msg_namelen = sizeof(dest_addr)
     };
 
-    int ret = kernel_sendmsg(sock, &msg, &kv, 1, len);
+    int ret = kernel_sendmsg(sd->sock, &msg, &kv, 1, len);
 
     if (unlikely(ret < 0)) {
         return ret;
@@ -92,18 +109,16 @@ int sock_write(struct socket *sock, unchar* data, size_t len, __be32 ip, __be16 
     return ret;
 }
 
-struct read_result sock_read(struct socket *sock)
+void sock_read(struct sock_data* sd)
 {
-    struct read_result res = {.buf = read_buffer, .len = 0};
-
-    if (unlikely(!sock)) {
-        return res;
+    if (unlikely(!sd || !sd->sock)) {
+        return;
     }
 
     struct kvec kv;
 
-    kv.iov_base = read_buffer;
-    kv.iov_len = sizeof(read_buffer);
+    kv.iov_base = sd->readb;
+    kv.iov_len = sd->mbs;
 
     struct sockaddr_in src_addr = {0};
     struct msghdr msg = {
@@ -111,18 +126,18 @@ struct read_result sock_read(struct socket *sock)
         .msg_namelen = sizeof(src_addr)
     };
 
-    int ret = kernel_recvmsg(sock, &msg, &kv, 1, sizeof(read_buffer), MSG_DONTWAIT);
+    int ret = kernel_recvmsg(sd->sock, &msg, &kv, 1, sd->mbs, MSG_DONTWAIT);
 
     if (likely(ret > 0)) {
-        res.ip = src_addr.sin_addr.s_addr;
-        res.port = src_addr.sin_port;
+        sd->sip = src_addr.sin_addr.s_addr;
+        sd->sport = src_addr.sin_port;
     }
 
     if (unlikely(ret == -EAGAIN || ret == -EWOULDBLOCK)) {
-        res.len = 0;
+        sd->readbl = 0;
     } else {
-        res.len = ret;
+        sd->readbl = ret;
     }
 
-    return res;
+    return;
 }

@@ -1,22 +1,14 @@
 #ifndef SOCK_IMPL_H
 #define SOCK_IMPL_H
 
-#include <linux/socket.h>
-#include <linux/types.h>
+#include "types.h"
 
-struct read_result {
-    unchar* buf;
-    int len;
-    __be32 ip;
-    __be16 port;
-};
+struct sock_data* sock_init(__be16 port);
 
-struct socket* sock_init(__be16 port);
+void sock_close(struct sock_data* sd);
 
-void sock_close(struct socket *sock);
+int sock_write(struct sock_data* sd, unchar* data, size_t len, __be32 ip, __be16 port);
 
-int sock_write(struct socket *sock, unchar* data, size_t len, __be32 ip, __be16 port);
-
-struct read_result sock_read(struct socket *sock);
+void sock_read(struct sock_data* sd);
 
 #endif
