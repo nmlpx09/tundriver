@@ -6,6 +6,7 @@
 #include <linux/socket.h>
 #include <linux/types.h>
 
+#include <crypt/types.h>
 #include <sock/types.h>
 
 struct dest_addr {
@@ -25,7 +26,9 @@ struct tun_priv {
     struct work_struct recv_work;
     void (*orig_data_ready)(struct sock *sk);
 
-    struct  dest_addr dest;
+    struct dest_addr dest;
+
+    struct crypt_data* cd;
 };
 
 #endif

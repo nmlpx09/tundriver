@@ -13,12 +13,16 @@ struct sock_data* sock_init(__be16 port)
 {
     struct sock_data* res = kmalloc(sizeof(struct sock_data), GFP_KERNEL);
 
+    if (!res) {
+        return ERR_PTR(-ENOMEM);
+    }
+
+    res->mbs = MAX_BUFFER_SIZE;
     res->sock = NULL;
     res->readb = NULL;
     res->readbl = -1;
     res->sip = 0;
     res->sport = 0;
-    res->mbs = MAX_BUFFER_SIZE;
 
     struct socket* sock;
 
@@ -60,6 +64,12 @@ struct sock_data* sock_init(__be16 port)
     res->sock = sock;
     res->readb = kmalloc(res->mbs, GFP_KERNEL);
 
+    if (!res->readb) {
+        sock_release(sock);
+        kfree(res);
+        return ERR_PTR(-ENOMEM);
+    }
+
     return res;
 }
 
@@ -68,7 +78,10 @@ void sock_close(struct sock_data* sd)
     if (!sd) {
         return;
     }
-    sock_release(sd->sock);
+
+    if (sd->sock) {
+        sock_release(sd->sock);
+    }
 
     kfree(sd->readb);
     kfree(sd);
