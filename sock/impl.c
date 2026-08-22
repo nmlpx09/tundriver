@@ -122,10 +122,10 @@ int sock_write(struct sock_data* sd, u8* data, size_t len, __be32 ip, __be16 por
     return ret;
 }
 
-void sock_read(struct sock_data* sd)
+int sock_read(struct sock_data* sd)
 {
     if (unlikely(!sd || !sd->sock)) {
-        return;
+        return -EINVAL;
     }
 
     struct kvec kv;
@@ -144,13 +144,14 @@ void sock_read(struct sock_data* sd)
     if (likely(ret > 0)) {
         sd->sip = src_addr.sin_addr.s_addr;
         sd->sport = src_addr.sin_port;
-    }
-
-    if (unlikely(ret == -EAGAIN || ret == -EWOULDBLOCK)) {
-        sd->readbl = 0;
-    } else {
         sd->readbl = ret;
     }
 
-    return;
+    if (unlikely(ret == -EAGAIN || ret == -EWOULDBLOCK || ret == 0)) {
+        sd->readbl = 0;
+    } else if (unlikely(ret < 0)) {
+        return -EIO;
+    }
+
+    return ret;
 }

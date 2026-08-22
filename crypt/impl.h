@@ -5,7 +5,7 @@
 
 struct crypt_data* crypt_init(void);
 void crypt_close(struct crypt_data* cd);
-void encrypt(struct crypt_data* cd, u8* buf, size_t len);
-void decrypt(struct crypt_data* cd, u8* buf, size_t len);
+int encrypt(struct crypt_data* cd, u8* buf, size_t len);
+int decrypt(struct crypt_data* cd, u8* buf, size_t len);
 
 #endif

@@ -32,6 +32,7 @@ static void send_work(struct work_struct* work)
     struct sock_data* sd = priv->sd;
     struct crypt_data* cd = priv->cd;
     struct sk_buff* skb;
+    int ret;
 
     unsigned long flags;
 
@@ -60,15 +61,15 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            encrypt(cd, skb->data + ETH_HLEN, skb->len - ETH_HLEN);
+            ret = encrypt(cd, skb->data + ETH_HLEN, skb->len - ETH_HLEN);
 
-            if (unlikely(cd->encrbl == 0)) {
+            if (unlikely(ret <= 0)) {
                 pr_warn("tun: encrypt failed\n");
                 dev_kfree_skb_any(skb);
                 continue;
             }
 
-            int ret = sock_write(sd, cd->encrb, cd->encrbl, priv->dest.ip, priv->dest.port);
+            ret = sock_write(sd, cd->encrb, cd->encrbl, priv->dest.ip, priv->dest.port);
 
             if (unlikely(ret < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", ret);
@@ -85,24 +86,25 @@ static void recv_work(struct work_struct* work)
     struct net_device* dev = priv->dev;
     struct sock_data* sd = priv->sd;
     struct crypt_data* cd = priv->cd;
+    int ret;
 
     while (true) {
         if (unlikely(!netif_running(dev) || !sd || !cd)) {
             break;
         }
 
-        sock_read(sd);
+        ret = sock_read(sd);
 
-        if (unlikely(sd->readbl < 0)) {
+        if (unlikely(ret < 0)) {
             pr_warn("tun: sock_read failed: %d\n", sd->readbl);
             break;
-        } else if (unlikely(sd->readbl == 0)) {
+        } else if (unlikely(ret == 0)) {
             break;
         }
 
-        decrypt(cd, sd->readb, sd->readbl);
+        ret = decrypt(cd, sd->readb, sd->readbl);
 
-        if (unlikely(cd->decrbl == 0)) {
+        if (unlikely(ret <= 0)) {
             pr_warn("tun: decrypt failed");
             continue;
         }
