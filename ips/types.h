@@ -1,21 +1,24 @@
 #ifndef IPS_TYPES_H
 #define IPS_TYPES_H
 
-#include <linux/types.h>
 #include <linux/hashtable.h>
+#include <linux/ktime.h>
+#include <linux/types.h>
 
 struct ips_entry {
     __be32 key;
     __be32 ip;
     __be16 port;
+    u64 ts;
     struct hlist_node node;
+    struct rcu_head rhf;
 };
 
 #define IPS_HASH_BITS 8
-#define IPS_HASH_SIZE (1 << IPS_HASH_BITS)
 
 struct ips_storage {
     DECLARE_HASHTABLE(table, IPS_HASH_BITS);
+    u64 ts;
 };
 
 #endif

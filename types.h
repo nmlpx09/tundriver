@@ -34,7 +34,6 @@ struct tun_priv {
     u8 decrb[MAX_BUFFER_SIZE];
 
     struct ips_storage* ips;
-    spinlock_t ips_lock;
 };
 
 #endif

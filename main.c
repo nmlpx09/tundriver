@@ -70,17 +70,19 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            spin_lock(&priv->ips_lock);
+            rcu_read_lock();
             struct ips_entry* entry = ips_get(priv->ips, dip);
-            spin_unlock(&priv->ips_lock);
 
-            if (unlikely(!entry)) {
+            if (unlikely(IS_ERR_OR_NULL(entry))) {
                 pr_warn("tun: not have dst destination\n");
                 dev_kfree_skb_any(skb);
+                rcu_read_unlock();
                 continue;
             }
+
             tip = entry->ip;
             tport = entry->port;
+            rcu_read_unlock();
         #else
             tip = priv->dest.ip;
             tport = priv->dest.port;
@@ -144,9 +146,8 @@ static void recv_work(struct work_struct* work)
             pr_warn("tun: not valid src ip\n");
             continue;
          }
-        spin_lock(&priv->ips_lock);
+
         ips_add(priv->ips, sip, tip, tport);
-        spin_unlock(&priv->ips_lock);
     #endif
 
         struct sk_buff* skb = netdev_alloc_skb(dev, dcl + ETH_HLEN + NET_IP_ALIGN);
@@ -261,7 +262,6 @@ static void setup(struct net_device* dev)
 
     priv = netdev_priv(dev);
     spin_lock_init(&priv->send_lock);
-    spin_lock_init(&priv->ips_lock);
     INIT_KFIFO(priv->send_fifo);
     INIT_WORK(&priv->send_work, send_work);
     INIT_WORK(&priv->recv_work, recv_work);
@@ -358,6 +358,10 @@ static void __exit mexit(void)
     }
 
     kfifo_free(&priv->send_fifo);
+
+    if (priv->ips) {
+        ips_close(priv->ips);
+    }
 
     if (priv->sock) {
         sock_close(priv->sock);
