@@ -1,12 +1,12 @@
 #include <linux/err.h>
 #include <linux/module.h>
 #include <linux/etherdevice.h>
-#include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include <linux/inet.h>
 #include <net/sock.h>
 
 #include <crypt/impl.h>
+#include <ips/impl.h>
 #include <sock/impl.h>
 #include <utils/impl.h>
 
@@ -31,6 +31,8 @@ static void send_work(struct work_struct* work)
     struct tun_priv* priv = container_of(work, struct tun_priv, send_work);
     struct sk_buff* skb;
     unsigned long flags;
+    __be32 tip;
+    __be16 tport;
 
     while (true) {
         if (unlikely(!priv->sock)) {
@@ -50,14 +52,41 @@ static void send_work(struct work_struct* work)
             continue;
         }
 
+        u8* buf = skb->data + ETH_HLEN;
+        size_t bufl = skb->len - ETH_HLEN;
+
         if (likely(skb->len > ETH_HLEN)) {
-            if (unlikely(!valid_ipv4_packet(skb->data + ETH_HLEN, skb->len - ETH_HLEN))) {
+            if (unlikely(!valid_ipv4_packet(buf, bufl))) {
                 pr_warn("tun: not valid ipv4 packet\n");
                 dev_kfree_skb_any(skb);
                 continue;
             }
 
-            int enl = encrypt(priv->encrb, skb->data + ETH_HLEN, skb->len - ETH_HLEN);
+        #ifdef SERVER
+            __be32 dip = get_dst_ip_from_ipv4_packet(buf, bufl);
+            if (unlikely(!dip)) {
+                pr_warn("tun: not valid dst ip\n");
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
+            spin_lock(&priv->ips_lock);
+            struct ips_entry* entry = ips_get(priv->ips, dip);
+            spin_unlock(&priv->ips_lock);
+
+            if (unlikely(!entry)) {
+                pr_warn("tun: not have dst destination\n");
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+            tip = entry->ip;
+            tport = entry->port;
+        #else
+            tip = priv->dest.ip;
+            tport = priv->dest.port;
+        #endif
+
+            int enl = encrypt(priv->encrb, buf, bufl);
 
             if (unlikely(enl <= 0)) {
                 pr_warn("tun: encrypt failed\n");
@@ -65,7 +94,7 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            int swl = sock_write(priv->sock, priv->encrb, enl, priv->dest.ip, priv->dest.port);
+            int swl = sock_write(priv->sock, priv->encrb, enl, tip, tport);
 
             if (unlikely(swl < 0)) {
                 pr_warn("tun: sock_write failed: %d\n", swl);
@@ -80,15 +109,15 @@ static void recv_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, recv_work);
     struct net_device* dev = priv->dev;
-    __be32 sip;
-    __be16 sport;
+    __be32 tip;
+    __be16 tport;
 
     while (true) {
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        int srl = sock_read(priv->sock, priv->srb, sizeof(priv->srb), &sip, &sport);
+        int srl = sock_read(priv->sock, priv->srb, sizeof(priv->srb), &tip, &tport);
 
         if (unlikely(srl < 0)) {
             pr_warn("tun: sock_read failed: %d\n", srl);
@@ -108,6 +137,17 @@ static void recv_work(struct work_struct* work)
             pr_warn("tun: not valid ipv4 packet\n");
             continue;
         }
+
+    #ifdef SERVER
+        __be32 sip = get_src_ip_from_ipv4_packet(priv->decrb, dcl);
+         if (unlikely(!sip)) {
+            pr_warn("tun: not valid src ip\n");
+            continue;
+         }
+        spin_lock(&priv->ips_lock);
+        ips_add(priv->ips, sip, tip, tport);
+        spin_unlock(&priv->ips_lock);
+    #endif
 
         struct sk_buff* skb = netdev_alloc_skb(dev, dcl + ETH_HLEN + NET_IP_ALIGN);
         if (unlikely(!skb)) {
@@ -144,6 +184,7 @@ static void data_ready(struct sock* sk)
 
 static int open(struct net_device* dev)
 {
+    netif_carrier_on(dev);
     netif_start_queue(dev);
     pr_info("tun: device opened\n");
     return 0;
@@ -155,12 +196,14 @@ static int stop(struct net_device* dev)
     struct sk_buff* skb;
 
     netif_stop_queue(dev);
+    netif_carrier_off(dev);
 
     cancel_work_sync(&priv->send_work);
     cancel_work_sync(&priv->recv_work);
 
-    while (kfifo_get(&priv->send_fifo, &skb))
+    while (kfifo_get(&priv->send_fifo, &skb)) {
         dev_kfree_skb_any(skb);
+    }
 
     pr_info("tun: device stopped\n");
     return 0;
@@ -218,6 +261,7 @@ static void setup(struct net_device* dev)
 
     priv = netdev_priv(dev);
     spin_lock_init(&priv->send_lock);
+    spin_lock_init(&priv->ips_lock);
     INIT_KFIFO(priv->send_fifo);
     INIT_WORK(&priv->send_work, send_work);
     INIT_WORK(&priv->recv_work, recv_work);
@@ -239,8 +283,18 @@ static int __init minit(void)
     priv->sock = sock_init(htons(src_port));
     if (IS_ERR(priv->sock)) {
         err = PTR_ERR(priv->sock);
-        pr_err("tun: sock_init failed: %d\n", err);
+        pr_err("tun: sock init failed: %d\n", err);
         free_netdev(dev);
+        return err;
+    }
+
+    priv->ips = ips_init();
+
+    if (IS_ERR(priv->ips)) {
+        err = PTR_ERR(priv->ips);
+        pr_err("tun: ips failed: %d\n", err);
+        free_netdev(dev);
+        sock_close(priv->sock);
         return err;
     }
 
@@ -249,6 +303,7 @@ static int __init minit(void)
         pr_err("tun: failed to allocate send fifo: %d\n", err);
         free_netdev(dev);
         sock_close(priv->sock);
+        ips_close(priv->ips);
         return err;
     }
 
@@ -260,6 +315,7 @@ static int __init minit(void)
         pr_err("tun: failed to register net device: %d\n", err);
         free_netdev(dev);
         sock_close(priv->sock);
+        ips_close(priv->ips);
         kfifo_free(&priv->send_fifo);
         return err;
     }

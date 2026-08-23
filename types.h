@@ -6,6 +6,8 @@
 #include <linux/socket.h>
 #include <linux/types.h>
 
+#include <ips/types.h>
+
 #include "configs.h"
 
 struct dest_addr {
@@ -30,6 +32,9 @@ struct tun_priv {
 
     u8 encrb[MAX_BUFFER_SIZE];
     u8 decrb[MAX_BUFFER_SIZE];
+
+    struct ips_storage* ips;
+    spinlock_t ips_lock;
 };
 
 #endif
