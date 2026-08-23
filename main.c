@@ -29,15 +29,11 @@ static struct net_device* dev;
 static void send_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, send_work);
-    struct sock_data* sd = priv->sd;
-    struct crypt_data* cd = priv->cd;
     struct sk_buff* skb;
-    int ret;
-
     unsigned long flags;
 
     while (true) {
-        if (unlikely(!sd || !cd)) {
+        if (unlikely(!priv->sock)) {
             break;
         }
 
@@ -61,18 +57,18 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            ret = encrypt(cd, skb->data + ETH_HLEN, skb->len - ETH_HLEN);
+            int enl = encrypt(priv->encrb, skb->data + ETH_HLEN, skb->len - ETH_HLEN);
 
-            if (unlikely(ret <= 0)) {
+            if (unlikely(enl <= 0)) {
                 pr_warn("tun: encrypt failed\n");
                 dev_kfree_skb_any(skb);
                 continue;
             }
 
-            ret = sock_write(sd, cd->encrb, cd->encrbl, priv->dest.ip, priv->dest.port);
+            int swl = sock_write(priv->sock, priv->encrb, enl, priv->dest.ip, priv->dest.port);
 
-            if (unlikely(ret < 0)) {
-                pr_warn("tun: sock_write failed: %d\n", ret);
+            if (unlikely(swl < 0)) {
+                pr_warn("tun: sock_write failed: %d\n", swl);
             }
         }
 
@@ -84,37 +80,36 @@ static void recv_work(struct work_struct* work)
 {
     struct tun_priv* priv = container_of(work, struct tun_priv, recv_work);
     struct net_device* dev = priv->dev;
-    struct sock_data* sd = priv->sd;
-    struct crypt_data* cd = priv->cd;
-    int ret;
+    __be32 sip;
+    __be16 sport;
 
     while (true) {
-        if (unlikely(!netif_running(dev) || !sd || !cd)) {
+        if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        ret = sock_read(sd);
+        int srl = sock_read(priv->sock, priv->srb, sizeof(priv->srb), &sip, &sport);
 
-        if (unlikely(ret < 0)) {
-            pr_warn("tun: sock_read failed: %d\n", sd->readbl);
+        if (unlikely(srl < 0)) {
+            pr_warn("tun: sock_read failed: %d\n", srl);
             break;
-        } else if (unlikely(ret == 0)) {
+        } else if (unlikely(srl == 0)) {
             break;
         }
 
-        ret = decrypt(cd, sd->readb, sd->readbl);
+        int dcl = decrypt(priv->decrb, priv->srb, srl);
 
-        if (unlikely(ret <= 0)) {
+        if (unlikely(dcl <= 0)) {
             pr_warn("tun: decrypt failed");
             continue;
         }
 
-        if (unlikely(!valid_ipv4_packet(cd->decrb, cd->decrbl))) {
+        if (unlikely(!valid_ipv4_packet(priv->decrb, dcl))) {
             pr_warn("tun: not valid ipv4 packet\n");
             continue;
         }
 
-        struct sk_buff* skb = netdev_alloc_skb(dev, cd->decrbl + ETH_HLEN + NET_IP_ALIGN);
+        struct sk_buff* skb = netdev_alloc_skb(dev, dcl + ETH_HLEN + NET_IP_ALIGN);
         if (unlikely(!skb)) {
             continue;
         }
@@ -126,7 +121,7 @@ static void recv_work(struct work_struct* work)
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
 
-        skb_put_data(skb, cd->decrb, cd->decrbl);
+        skb_put_data(skb, priv->decrb, dcl);
 
         skb->dev = dev;
         skb->protocol = eth_type_trans(skb, dev);
@@ -174,14 +169,8 @@ static int stop(struct net_device* dev)
 static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_priv* priv = netdev_priv(dev);
-
-    if (unlikely(!priv->sd)) {
-        dev_kfree_skb_any(skb);
-        dev->stats.tx_dropped++;
-        return NETDEV_TX_OK;
-    }
-
     unsigned long flags;
+
     spin_lock_irqsave(&priv->send_lock, flags);
     if (unlikely(kfifo_is_full(&priv->send_fifo))) {
         spin_unlock_irqrestore(&priv->send_lock, flags);
@@ -247,22 +236,11 @@ static int __init minit(void)
     struct tun_priv* priv = netdev_priv(dev);
     priv->dev = dev;
 
-    priv->sd = sock_init(htons(src_port));
-
-    if (IS_ERR(priv->sd)) {
-        err = PTR_ERR(priv->sd);
+    priv->sock = sock_init(htons(src_port));
+    if (IS_ERR(priv->sock)) {
+        err = PTR_ERR(priv->sock);
         pr_err("tun: sock_init failed: %d\n", err);
         free_netdev(dev);
-        return err;
-    }
-
-    priv->cd = crypt_init();
-
-    if (IS_ERR(priv->cd)) {
-        err = PTR_ERR(priv->cd);
-        pr_err("tun: crypt_init failed: %d\n", err);
-        free_netdev(dev);
-        sock_close(priv->sd);
         return err;
     }
 
@@ -270,8 +248,7 @@ static int __init minit(void)
     if (err) {
         pr_err("tun: failed to allocate send fifo: %d\n", err);
         free_netdev(dev);
-        sock_close(priv->sd);
-        crypt_close(priv->cd);
+        sock_close(priv->sock);
         return err;
     }
 
@@ -282,13 +259,12 @@ static int __init minit(void)
     if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
         free_netdev(dev);
-        sock_close(priv->sd);
-        crypt_close(priv->cd);
+        sock_close(priv->sock);
         kfifo_free(&priv->send_fifo);
         return err;
     }
 
-    struct sock* sk = priv->sd->sock->sk;
+    struct sock* sk = priv->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     priv->orig_data_ready = sk->sk_data_ready;
     sk->sk_data_ready = data_ready;
@@ -317,8 +293,8 @@ static void __exit mexit(void)
         dev_kfree_skb_any(skb);
     }
 
-    if (priv->sd && priv->sd->sock) {
-        struct sock* sk = priv->sd->sock->sk;
+    if (priv->sock) {
+        struct sock* sk = priv->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = priv->orig_data_ready;
         sk->sk_user_data = NULL;
@@ -327,12 +303,8 @@ static void __exit mexit(void)
 
     kfifo_free(&priv->send_fifo);
 
-    if (priv->sd) {
-        sock_close(priv->sd);
-    }
-
-    if (priv->cd) {
-        crypt_close(priv->cd);
+    if (priv->sock) {
+        sock_close(priv->sock);
     }
 
     free_netdev(dev);

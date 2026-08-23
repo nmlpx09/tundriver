@@ -1,90 +1,45 @@
 #include <linux/compiler.h>
-#include <linux/slab.h>
+#include <linux/errno.h>
 
 #include <configs.h>
 
 #include "impl.h"
 #include "table.h"
 
-struct crypt_data* crypt_init(void)
+int encrypt(u8* rb, u8* sb, size_t sl)
 {
-    struct crypt_data* res = kmalloc(sizeof(struct crypt_data), GFP_KERNEL);
-
-    if (!res) {
-        return ERR_PTR(-ENOMEM);
-    }
-
-    res->mbs = MAX_BUFFER_SIZE;
-    res->encrbl = 0;
-    res->decrbl = 0;
-
-    res->encrb = kmalloc(res->mbs, GFP_KERNEL);
-
-    if (!res->encrb) {
-        kfree(res);
-        return ERR_PTR(-ENOMEM);
-    }
-
-    res->decrb = kmalloc(res->mbs, GFP_KERNEL);
-
-    if (!res->decrb) {
-        kfree(res->encrb);
-        kfree(res);
-        return ERR_PTR(-ENOMEM);
-    }
-
-    return res;
-}
-
-void crypt_close(struct crypt_data* cd)
-{
-    if (!cd) {
-        return;
-    }
-
-    kfree(cd->encrb);
-    kfree(cd->decrb);
-    kfree(cd);
-}
-
-int encrypt(struct crypt_data* cd, u8* buf, size_t len)
-{
-    if (unlikely(!cd || !cd->encrb)) {
+    if (unlikely(!rb || !sb)) {
         return -EINVAL;
     }
 
-    if (unlikely(cd->mbs < len)) {
+    if (unlikely(MAX_BUFFER_SIZE < sl)) {
         return 0;
     }
 
-    u8* encrb = cd->encrb;
-    size_t res_len = 0;
+    size_t rl = 0;
 
-    for (; res_len < len; ++res_len) {
-        encrb[res_len] = ENCRYPT_TABLE[buf[res_len]];
+    for (; rl < sl; ++rl) {
+        rb[rl] = ENCRYPT_TABLE[sb[rl]];
     }
 
-    cd->encrbl = res_len;
-    return res_len;
+    return rl;
 }
 
-int decrypt(struct crypt_data* cd, u8* buf, size_t len)
+int decrypt(u8* rb, u8* sb, size_t sl)
 {
-    if (unlikely(!cd || !cd->decrb)) {
+    if (unlikely(!rb || !sb)) {
         return -EINVAL;
     }
 
-    if (unlikely(cd->mbs < len)) {
+    if (unlikely(MAX_BUFFER_SIZE < sl)) {
         return 0;
     }
 
-    u8* decrb = cd->decrb;
-    size_t res_len = 0;
+    size_t rl = 0;
 
-    for (; res_len < len; ++res_len) {
-        decrb[res_len] = DECRYPT_TABLE[buf[res_len]];
+    for (; rl < sl; ++rl) {
+        rb[rl] = DECRYPT_TABLE[sb[rl]];
     }
 
-    cd->decrbl = res_len;
-    return res_len;
+    return rl;
 }

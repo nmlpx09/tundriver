@@ -3,12 +3,12 @@
 
 #include "types.h"
 
-struct sock_data* sock_init(__be16 port);
+struct socket* sock_init(__be16 port);
 
-void sock_close(struct sock_data* sd);
+void sock_close(struct socket*);
 
-int sock_write(struct sock_data* sd, u8* data, size_t len, __be32 ip, __be16 port);
+int sock_write(struct socket *sock, u8* data, size_t len, __be32 ip, __be16 port);
 
-int sock_read(struct sock_data* sd);
+int sock_read(struct socket *sock, u8* data, size_t len, __be32* ip, __be16* port);
 
 #endif

@@ -1,11 +1,7 @@
 #ifndef CRYPT_IMPL_H
 #define CRYPT_IMPL_H
 
-#include "types.h"
-
-struct crypt_data* crypt_init(void);
-void crypt_close(struct crypt_data* cd);
-int encrypt(struct crypt_data* cd, u8* buf, size_t len);
-int decrypt(struct crypt_data* cd, u8* buf, size_t len);
+int encrypt(u8* rb, u8* sb, size_t sl);
+int decrypt(u8* rb, u8* sb, size_t sl);
 
 #endif

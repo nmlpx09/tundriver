@@ -6,8 +6,7 @@
 #include <linux/socket.h>
 #include <linux/types.h>
 
-#include <crypt/types.h>
-#include <sock/types.h>
+#include "configs.h"
 
 struct dest_addr {
     __be32 ip;
@@ -17,7 +16,8 @@ struct dest_addr {
 struct tun_priv {
     struct net_device* dev;
 
-    struct sock_data* sd;
+    struct socket *sock;
+    u8 srb[MAX_BUFFER_SIZE];
 
     DECLARE_KFIFO_PTR(send_fifo, struct sk_buff *);
     spinlock_t send_lock;
@@ -28,7 +28,8 @@ struct tun_priv {
 
     struct dest_addr dest;
 
-    struct crypt_data* cd;
+    u8 encrb[MAX_BUFFER_SIZE];
+    u8 decrb[MAX_BUFFER_SIZE];
 };
 
 #endif
