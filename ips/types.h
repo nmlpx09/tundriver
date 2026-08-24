@@ -14,7 +14,10 @@ struct ips_entry {
     struct rcu_head rhf;
 };
 
-#define IPS_HASH_BITS 8
+#define IPS_HASH_BITS 10
+
+#define IPS_CHECK_DELAY_NS (600ull * NSEC_PER_SEC)
+#define IPS_REMOVE_DELAY_NS (3600ull * NSEC_PER_SEC)
 
 struct ips_storage {
     DECLARE_HASHTABLE(table, IPS_HASH_BITS);

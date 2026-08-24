@@ -1,6 +1,8 @@
 #ifndef IPS_IMPL_H
 #define IPS_IMPL_H
 
+#include <linux/types.h>
+
 #include "types.h"
 
 struct ips_storage* ips_init(void);

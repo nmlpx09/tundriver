@@ -31,7 +31,7 @@ void ips_close(struct ips_storage* storage)
     int i;
 
     hash_for_each_safe(storage->table, i, tmp, entry, node) {
-        hash_del(&entry->node);
+        hash_del_rcu(&entry->node);
         kfree_rcu(entry, rhf);
     }
 
@@ -54,7 +54,7 @@ struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
     u32 h = ips_hash(key);
 
     hash_for_each_possible(storage->table, entry, node, h) {
-        if (unlikely(entry->key == key)) {
+        if (entry->key == key) {
             return entry;
         }
     }
@@ -78,19 +78,19 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         int i;
         hash_for_each_safe(storage->table, i, tmp, entry, node) {
             if (unlikely(now - entry->ts > IPS_REMOVE_DELAY_NS)) {
-                hash_del(&entry->node);
+                hash_del_rcu(&entry->node);
                 kfree_rcu(entry, rhf);
             }
         }
     }
 
-    rcu_read_lock();
     entry = ips_get(storage, key);
-    rcu_read_unlock();
 
     if (likely(entry)) {
-        hash_del(&entry->node);
-        kfree_rcu(entry, rhf);
+        WRITE_ONCE(entry->ip, ip);
+        WRITE_ONCE(entry->port, port);
+        WRITE_ONCE(entry->ts, now);
+        return 0;
     }
 
     entry = kmalloc(sizeof(struct ips_entry), GFP_KERNEL);
@@ -103,7 +103,7 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
     entry->port = port;
     entry->ts = now;
     u32 h = ips_hash(key);
-    hash_add(storage->table, &entry->node, h);
+    hash_add_rcu(storage->table, &entry->node, h);
 
     return 0;
 }

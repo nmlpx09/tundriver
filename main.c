@@ -80,8 +80,8 @@ static void send_work(struct work_struct* work)
                 continue;
             }
 
-            tip = entry->ip;
-            tport = entry->port;
+            tip = READ_ONCE(entry->ip);
+            tport = READ_ONCE(entry->port);
             rcu_read_unlock();
         #else
             tip = priv->dest.ip;
