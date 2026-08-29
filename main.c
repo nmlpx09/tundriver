@@ -85,6 +85,7 @@ static void tx(struct work_struct* work)
         size_t bufl = skb->len - ETH_HLEN;
 
         if (unlikely(!valid_ipv4_packet(buf, bufl))) {
+            dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
@@ -92,13 +93,23 @@ static void tx(struct work_struct* work)
     #ifdef SERVER
         __be32 ip = get_dst_ip_from_ipv4_packet(buf, bufl);
         if (unlikely(!ip)) {
-            dev->stats.tx_errors++;
+            dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
         rcu_read_lock();
-        struct ips_entry* entry = ips_get(tun->ips, ip);
+
+        struct ips_storage* ips = READ_ONCE(tun->ips);
+
+        if (unlikely(!ips)) {
+            dev->stats.tx_errors++;
+            dev_kfree_skb_any(skb);
+            rcu_read_unlock();
+            break;
+        }
+
+        struct ips_entry* entry = ips_get(ips, ip);
 
         if (unlikely(IS_ERR_OR_NULL(entry))) {
             dev->stats.tx_errors++;
@@ -172,18 +183,25 @@ static void rx(struct work_struct* work)
         }
 
         if (unlikely(!valid_ipv4_packet(tun->decrb, dcl))) {
-            dev->stats.rx_errors++;
+            dev->stats.rx_dropped++;
             continue;
         }
 
     #ifdef SERVER
         __be32 sip = get_src_ip_from_ipv4_packet(tun->decrb, dcl);
         if (unlikely(!sip)) {
-            dev->stats.rx_errors++;
+            dev->stats.rx_dropped++;
             continue;
         }
 
-        ips_add(tun->ips, sip, tip, tport);
+        struct ips_storage* ips = READ_ONCE(tun->ips);
+
+        if (unlikely(!ips)) {
+            dev->stats.rx_errors++;
+            break;
+        }
+
+        ips_add(ips, sip, tip, tport);
     #endif
 
         struct sk_buff* skb = netdev_alloc_skb(dev, dcl + ETH_HLEN + NET_IP_ALIGN);
@@ -294,8 +312,6 @@ static void dsetup(struct net_device* dev)
 
 static int __init minit(void)
 {
-    struct tun_struct* tun;
-    struct sock* sk;
     __be32 dip;
     int err;
 
@@ -320,7 +336,7 @@ static int __init minit(void)
         return -ENOMEM;
     }
 
-    tun = netdev_priv(tdev);
+    struct tun_struct* tun = netdev_priv(tdev);
 
     tun->dev = tdev;
     tun->dip = dip;
@@ -340,12 +356,14 @@ static int __init minit(void)
 
     WRITE_ONCE(tun->sock, sock);
 
-    tun->ips = ips_init();
-    if (IS_ERR(tun->ips)) {
-        err = PTR_ERR(tun->ips);
+    struct ips_storage* ips = ips_init();
+    if (IS_ERR(ips)) {
+        err = PTR_ERR(ips);
         pr_err("tnet: ips init failed: %d\n", err);
         goto err_sock;
     }
+
+    WRITE_ONCE(tun->ips, ips);
 
     err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
@@ -359,7 +377,7 @@ static int __init minit(void)
         goto err_fifo;
     }
 
-    sk = tun->sock->sk;
+    struct sock* sk = tun->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     tun->orig_data_ready = sk->sk_data_ready;
     sk->sk_data_ready = dready;
@@ -388,8 +406,6 @@ static void __exit mexit(void)
 
     struct tun_struct* tun = netdev_priv(tdev);
 
-    unregister_netdev(tdev);
-
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
@@ -397,6 +413,8 @@ static void __exit mexit(void)
         sk->sk_user_data = NULL;
         write_unlock_bh(&sk->sk_callback_lock);
     }
+
+    unregister_netdev(tdev);
 
     cancel_work_sync(&tun->tx_work);
     cancel_work_sync(&tun->rx_work);
@@ -408,14 +426,16 @@ static void __exit mexit(void)
 
     kfifo_free(&tun->tx_fifo);
 
-    if (tun->ips) {
-        ips_close(tun->ips);
-        tun->ips = NULL;
+    struct ips_storage* ips = READ_ONCE(tun->ips);
+    if (ips) {
+        WRITE_ONCE(tun->ips, NULL);
+        ips_close(ips);
     }
 
-    if (tun->sock) {
-        sock_close(tun->sock);
-        tun->sock = NULL;
+    struct socket* sock = READ_ONCE(tun->sock);
+    if (sock) {
+        WRITE_ONCE(tun->sock, NULL);
+        sock_close(sock);
     }
 
     free_netdev(tdev);
