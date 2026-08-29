@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * tnet - tun_struct definition
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #ifndef TYPES_H
 #define TYPES_H
 

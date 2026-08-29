@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * tnet - virtual network interface over encrypted UDP tunnels
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/errno.h>

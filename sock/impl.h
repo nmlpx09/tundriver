@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * tnet - kernel UDP socket (bind, sendmsg, recvmsg)
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #ifndef SOCK_IMPL_H
 #define SOCK_IMPL_H
 

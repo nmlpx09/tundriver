@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * tnet - ips_entry, ips_storage types
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #ifndef IPS_TYPES_H
 #define IPS_TYPES_H
 

@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * tnet - IPv4 packet validation and IP extraction
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #ifndef UTILS_IMPL_H
 #define UTILS_IMPL_H
 

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * tnet - encrypt/decrypt (substitution cipher)
+ *
+ * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ */
+
 #include <linux/compiler.h>
 #include <linux/errno.h>
 

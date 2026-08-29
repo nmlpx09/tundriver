@@ -2,8 +2,8 @@
 
 set -exu
 
-REMOTE_IP=66.248.207.187
-REMOTE_PORT=69
+DEST_IP=
+DEST_PORT=69
 
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.2
@@ -38,8 +38,8 @@ function remove_rules {
 function check_vars {
     local empty_vars=()
 
-    [[ -z $REMOTE_IP ]]   && empty_vars+=(REMOTE_IP)
-    [[ -z $REMOTE_PORT ]] && empty_vars+=(REMOTE_PORT)
+    [[ -z $DEST_IP ]]   && empty_vars+=(DEST_IP)
+    [[ -z $DEST_PORT ]] && empty_vars+=(DEST_PORT)
     [[ -z $TUN_DEVICE ]]  && empty_vars+=(TUN_DEVICE)
     [[ -z $TUN_IP ]]      && empty_vars+=(TUN_IP)
     [[ -z $MODULE ]]      && empty_vars+=(MODULE)
@@ -57,7 +57,7 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        insmod $MODULE dest_ip=$REMOTE_IP dest_port=$REMOTE_PORT
+        insmod $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT
 
         if [ $? -ne 0 ]; then
             echo "tun not start"
