@@ -4,22 +4,18 @@
 #include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <linux/inet.h>
-#include <linux/kfifo.h>
 #include <linux/module.h>
-#include <linux/netdevice.h>
 #include <linux/printk.h>
-#include <linux/rcupdate.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
-#include <linux/types.h>
 #include <linux/workqueue.h>
 #include <net/sock.h>
-#include <sock/impl.h>
-#include <utils/impl.h>
 
 #include <crypt/impl.h>
 #include <ips/impl.h>
+#include <sock/impl.h>
+#include <utils/impl.h>
 
 #include "types.h"
 

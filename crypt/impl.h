@@ -1,6 +1,8 @@
 #ifndef CRYPT_IMPL_H
 #define CRYPT_IMPL_H
 
+#include <linux/types.h>
+
 int encrypt(u8* rb, size_t rl, u8* sb, size_t sl);
 int decrypt(u8* rb, size_t rl, u8* sb, size_t sl);
 

@@ -2,7 +2,7 @@ obj-m += tnet.o
 
 tnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o utils/impl.o
 
-ccflags-y += -O2 -I$(src) -I$(src)/sock -I$(src)/crypt -I$(src)/utils
+ccflags-y += -O2 -I$(src) -I$(src)/sock -I$(src)/crypt -I$(src)/ips -I$(src)/utils
 
 ifdef SERVER
 ccflags-y += -DSERVER
