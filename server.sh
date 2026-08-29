@@ -8,7 +8,7 @@ TUN_IP=10.0.3.1
 OUT_DEVICE=`ip route get 1.1.1.1 | head -1 | cut -d ' ' -f 5`
 SRC_PORT=69
 
-MODULE=tnet.ko
+MODULE=tnet
 
 function check_sudo {
     if [ $EUID -ne 0 ]; then
@@ -58,11 +58,10 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        insmod $MODULE src_port=$SRC_PORT
+        modprobe $MODULE src_port=$SRC_PORT
 
         if [ $? -ne 0 ]; then
             echo "tun not start"
-            remove_rules
             exit 1
         fi
 
@@ -72,7 +71,24 @@ case $1 in
     "d")
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
-        rmmod $MODULE
+        modprobe -r $MODULE
+
+        remove_rules
+        ;;
+
+    "r")
+        ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
+
+        modprobe -r $MODULE
+        modprobe $MODULE src_port=$SRC_PORT
+
+        if [ $? -ne 0 ]; then
+            echo "tun not start"
+            exit 1
+        fi
+
+        add_rules
+
         ;;
     *)
         echo "Usage: $0 {c|d}"

@@ -8,7 +8,7 @@ DEST_PORT=69
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.2
 
-MODULE=tnet.ko
+MODULE=tnet
 
 function check_sudo {
     if [ $EUID -ne 0 ]; then
@@ -57,11 +57,10 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        insmod $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT
+        modprobe $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT
 
         if [ $? -ne 0 ]; then
             echo "tun not start"
-            remove_rules
             exit 1
         fi
 
@@ -71,7 +70,7 @@ case $1 in
     "d")
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
-        rmmod $MODULE
+        modprobe -r $MODULE
 
         remove_rules || :
         ;;

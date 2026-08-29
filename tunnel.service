@@ -1,0 +1,20 @@
+[Unit]
+Description=Tunnel Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tun c
+ExecStop=/usr/bin/tun d
+ExecReload=/usr/bin/tun r
+Restart=on-failure
+RestartSec=5
+
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run
+
+[Install]
+WantedBy=multi-user.target
