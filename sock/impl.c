@@ -7,7 +7,7 @@
 
 #include "impl.h"
 
-#include <configs.h>
+#define SOCKET_BUFFER_SIZE (4 * 1024 * 1024)
 
 struct socket* sock_init(__be16 port)
 {

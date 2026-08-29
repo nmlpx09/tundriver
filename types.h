@@ -8,7 +8,7 @@
 
 #include <ips/types.h>
 
-#include "configs.h"
+#define MAX_BUFFER_SIZE 1472
 
 struct tun_struct {
     struct net_device* dev;

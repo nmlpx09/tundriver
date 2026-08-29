@@ -21,10 +21,11 @@
 #include <crypt/impl.h>
 #include <ips/impl.h>
 
-#include "configs.h"
 #include "types.h"
 
 #define DEV_NAME "tnet%d"
+#define MTU MAX_BUFFER_SIZE
+#define SEND_FIFO_SIZE 4096
 
 static char* dest_ip = "";
 static int dest_port = 0;
@@ -112,7 +113,7 @@ static void tx(struct work_struct* work)
         __be16 dport = tun->dport;
     #endif
 
-        int enl = encrypt(tun->encrb, buf, bufl);
+        int enl = encrypt(tun->encrb, sizeof(tun->encrb), buf, bufl);
 
         if (unlikely(enl <= 0)) {
             dev->stats.tx_errors++;
@@ -161,7 +162,7 @@ static void rx(struct work_struct* work)
             break;
         }
 
-        int dcl = decrypt(tun->decrb, tun->srb, srl);
+        int dcl = decrypt(tun->decrb, sizeof(tun->decrb), tun->srb, srl);
 
         if (unlikely(dcl <= 0)) {
             dev->stats.rx_errors++;
@@ -209,7 +210,7 @@ static void rx(struct work_struct* work)
     }
 }
 
-static void data_ready(struct sock* sk)
+static void dready(struct sock* sk)
 {
     struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
     if (likely(tun)) {
@@ -372,7 +373,7 @@ static int __init minit(void)
     struct sock* sk = tun->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     tun->orig_data_ready = sk->sk_data_ready;
-    sk->sk_data_ready = data_ready;
+    sk->sk_data_ready = dready;
     sk->sk_user_data = tun;
     write_unlock_bh(&sk->sk_callback_lock);
 

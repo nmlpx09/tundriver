@@ -8,6 +8,9 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
+#define IPS_CHECK_DELAY_NS (600ull * NSEC_PER_SEC)
+#define IPS_REMOVE_DELAY_NS (3600ull * NSEC_PER_SEC)
+
 #include "impl.h"
 
 struct ips_storage* ips_init(void)
