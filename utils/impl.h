@@ -2,7 +2,7 @@
 /*
  * tnet - IPv4 packet validation and IP extraction
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #ifndef UTILS_IMPL_H

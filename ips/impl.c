@@ -2,7 +2,7 @@
 /*
  * tnet - IPS table (RCU hashtable, add/get/expire)
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #include <linux/compiler.h>

@@ -2,7 +2,7 @@
 /*
  * tnet - encrypt/decrypt (substitution cipher)
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #ifndef CRYPT_IMPL_H

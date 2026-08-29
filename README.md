@@ -95,6 +95,6 @@ utils/impl.h
 
 ## License
 
-Copyright (c) 2026 nmlpx
+Copyright (c) 2026 nlmpx09
 
 Licensed under the [GNU General Public License v2.0](LICENSE) (GPL-2.0), the same license as the Linux kernel.

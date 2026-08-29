@@ -2,7 +2,7 @@
 /*
  * tnet - ips_entry, ips_storage types
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #ifndef IPS_TYPES_H

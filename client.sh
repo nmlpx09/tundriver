@@ -26,13 +26,13 @@ function add_rules {
     ip address add $TUN_IP/24 dev $TUN_DEVICE
     ip link set $TUN_DEVICE up
 
-    ip route add $REMOTE_IP `ip route | grep '^default' | cut -d ' ' -f 2-`
+    ip route add $DEST_IP `ip route | grep '^default' | cut -d ' ' -f 2-`
     ip route add 128.0.0.0/1 dev $TUN_DEVICE
     ip route add 0.0.0.0/1 dev $TUN_DEVICE
 }
 
 function remove_rules {
-    ip route del $REMOTE_IP
+    ip route del $DEST_IP
 }
 
 function check_vars {

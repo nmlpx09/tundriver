@@ -2,7 +2,7 @@
 /*
  * tnet - 256-byte encrypt/decrypt lookup tables
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #ifndef CRYPT_TABLE_H

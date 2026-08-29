@@ -2,7 +2,7 @@
 /*
  * tnet - tun_struct definition
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #ifndef TYPES_H

@@ -2,7 +2,7 @@
 /*
  * tnet - virtual network interface over encrypted UDP tunnels
  *
- * Copyright (c) 2026 nmlpx <nmlpx09@duck.com>
+ * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
 #include <linux/compiler.h>
@@ -85,7 +85,6 @@ static void tx(struct work_struct* work)
         size_t bufl = skb->len - ETH_HLEN;
 
         if (unlikely(!valid_ipv4_packet(buf, bufl))) {
-            dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             continue;
         }
@@ -295,85 +294,72 @@ static void dsetup(struct net_device* dev)
 
 static int __init minit(void)
 {
+    struct tun_struct* tun;
+    struct sock* sk;
+    __be32 dip;
     int err;
 
+    if (!in4_pton(dest_ip, -1, (u8*)&dip, -1, NULL)) {
+        pr_err("tnet: invalid dest_ip: %s\n", dest_ip);
+        return -EINVAL;
+    }
+
+    if (dest_port < 1 || dest_port > 65535) {
+        pr_err("tnet: invalid dest_port: %d (must be 1-65535)\n", dest_port);
+        return -EINVAL;
+    }
+
+    if (src_port < 0 || src_port > 65535) {
+        pr_err("tnet: invalid src_port: %d (must be 0-65535)\n", src_port);
+        return -EINVAL;
+    }
+
     tdev = alloc_netdev(sizeof(struct tun_struct), DEV_NAME, NET_NAME_UNKNOWN, dsetup);
-    
     if (!tdev) {
         pr_err("tnet: failed to allocate net device\n");
         return -ENOMEM;
     }
 
-    struct tun_struct* tun = netdev_priv(tdev);
+    tun = netdev_priv(tdev);
 
     tun->dev = tdev;
+    tun->dip = dip;
+    tun->dport = htons(dest_port);
 
     spin_lock_init(&tun->tx_lock);
     INIT_KFIFO(tun->tx_fifo);
     INIT_WORK(&tun->tx_work, tx);
     INIT_WORK(&tun->rx_work, rx);
 
-    __be32 dip;
-    if (!in4_pton(dest_ip, -1, (u8*)&dip, -1, NULL)) {
-        pr_err("tnet: invalid dest_ip: %s\n", dest_ip);
-        free_netdev(tdev);
-        return -EINVAL;
-    }
-
-    tun->dip = dip;
-
-    if (dest_port < 1 || dest_port > 65535) {
-        pr_err("tnet: invalid dest_port: %d (must be 1-65535)\n", dest_port);
-        free_netdev(tdev);
-        return -EINVAL;
-    }
-
-    tun->dport = htons(dest_port);
-
-    if (src_port < 0 || src_port > 65535) {
-        pr_err("tnet: invalid src_port: %d (must be 0-65535)\n", src_port);
-        free_netdev(tdev);
-        return -EINVAL;
-    }
-
-    WRITE_ONCE(tun->sock, sock_init(htons(src_port)));
-    if (IS_ERR(READ_ONCE(tun->sock))) {
-        err = PTR_ERR(tun->sock);
+    struct socket* sock = sock_init(htons(src_port));
+    if (IS_ERR(sock)) {
+        err = PTR_ERR(sock);
         pr_err("tnet: sock init failed: %d\n", err);
-        free_netdev(tdev);
-        return err;
+        goto err_netdev;
     }
+
+    WRITE_ONCE(tun->sock, sock);
 
     tun->ips = ips_init();
-
     if (IS_ERR(tun->ips)) {
         err = PTR_ERR(tun->ips);
-        pr_err("tnet: ips failed: %d\n", err);
-        sock_close(tun->sock);
-        free_netdev(tdev);
-        return err;
+        pr_err("tnet: ips init failed: %d\n", err);
+        goto err_sock;
     }
 
     err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
         pr_err("tnet: failed to allocate tx fifo: %d\n", err);
-        ips_close(tun->ips);
-        sock_close(tun->sock);
-        free_netdev(tdev);
-        return err;
+        goto err_ips;
     }
 
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
-        kfifo_free(&tun->tx_fifo);
-        ips_close(tun->ips);
-        sock_close(tun->sock);
-        free_netdev(tdev);
-        return err;
+        goto err_fifo;
     }
 
-    struct sock* sk = tun->sock->sk;
+    sk = tun->sock->sk;
     write_lock_bh(&sk->sk_callback_lock);
     tun->orig_data_ready = sk->sk_data_ready;
     sk->sk_data_ready = dready;
@@ -382,6 +368,16 @@ static int __init minit(void)
 
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
+
+err_fifo:
+    kfifo_free(&tun->tx_fifo);
+err_ips:
+    ips_close(tun->ips);
+err_sock:
+    sock_close(tun->sock);
+err_netdev:
+    free_netdev(tdev);
+    return err;
 }
 
 static void __exit mexit(void)
