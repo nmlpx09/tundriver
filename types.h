@@ -10,12 +10,7 @@
 
 #include "configs.h"
 
-struct dest_addr {
-    __be32 ip;
-    __be16 port;
-};
-
-struct tun_priv {
+struct tun_struct {
     struct net_device* dev;
 
     struct socket *sock;
@@ -23,17 +18,18 @@ struct tun_priv {
 
     DECLARE_KFIFO_PTR(send_fifo, struct sk_buff *);
     spinlock_t send_lock;
-    struct work_struct send_work;
+    struct work_struct tx_work;
 
-    struct work_struct recv_work;
+    struct work_struct rx_work;
     void (*orig_data_ready)(struct sock *sk);
-
-    struct dest_addr dest;
 
     u8 encrb[MAX_BUFFER_SIZE];
     u8 decrb[MAX_BUFFER_SIZE];
 
     struct ips_storage* ips;
+
+    __be32 dip;
+    __be16 dport;
 };
 
 #endif

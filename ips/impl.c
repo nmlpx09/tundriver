@@ -1,8 +1,12 @@
 #include <linux/compiler.h>
-#include <linux/slab.h>
+#include <linux/err.h>
+#include <linux/errno.h>
+#include <linux/hashtable.h>
 #include <linux/jhash.h>
-
-#include <configs.h>
+#include <linux/ktime.h>
+#include <linux/rcupdate.h>
+#include <linux/slab.h>
+#include <linux/types.h>
 
 #include "impl.h"
 

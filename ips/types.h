@@ -3,6 +3,8 @@
 
 #include <linux/hashtable.h>
 #include <linux/ktime.h>
+#include <linux/list.h>
+#include <linux/rcupdate.h>
 #include <linux/types.h>
 
 struct ips_entry {
