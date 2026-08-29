@@ -42,8 +42,8 @@ static struct net_device* tdev;
 static void tx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, tx_work);
-    struct sk_buff* skb;
-    unsigned long flags;
+    struct sk_buff* skb = NULL;
+    unsigned long flags = 0;
 
     while (true) {
         struct net_device* dev = tun->dev;
@@ -136,8 +136,8 @@ static void tx(struct work_struct* work)
 static void rx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, rx_work);
-    __be32 tip;
-    __be16 tport;
+    __be32 tip = 0;
+    __be16 tport = 0;
 
     while (true) {
         struct net_device* dev = tun->dev;
@@ -154,8 +154,10 @@ static void rx(struct work_struct* work)
 
         int srl = sock_read(sock, tun->srb, sizeof(tun->srb), &tip, &tport);
 
-        if (unlikely(srl <= 0)) {
+        if (unlikely(srl < 0)) {
             dev->stats.rx_errors++;
+            break;
+        } else if (unlikely(srl == 0)) {
             break;
         }
 
@@ -219,7 +221,7 @@ static int dopen(struct net_device* dev)
 {
     netif_carrier_on(dev);
     netif_start_queue(dev);
-    pr_info("tun: device opened\n");
+    pr_info("tnet: device opened\n");
     return 0;
 }
 
@@ -238,7 +240,7 @@ static int dstop(struct net_device* dev)
         dev_kfree_skb_any(skb);
     }
 
-    pr_info("tun: device stopped\n");
+    pr_info("tnet: device stopped\n");
     return 0;
 }
 
@@ -294,7 +296,7 @@ static int __init minit(void)
     tdev = alloc_netdev(sizeof(struct tun_struct), DEV_NAME, NET_NAME_UNKNOWN, dsetup);
     
     if (!tdev) {
-        pr_err("tun: failed to allocate net device\n");
+        pr_err("tnet: failed to allocate net device\n");
         return -ENOMEM;
     }
 
@@ -309,7 +311,7 @@ static int __init minit(void)
 
     __be32 dip;
     if (!in4_pton(dest_ip, -1, (u8*)&dip, -1, NULL)) {
-        pr_err("tun: invalid dest_ip: %s\n", dest_ip);
+        pr_err("tnet: invalid dest_ip: %s\n", dest_ip);
         free_netdev(tdev);
         return -EINVAL;
     }
@@ -317,7 +319,7 @@ static int __init minit(void)
     tun->dip = dip;
 
     if (dest_port < 1 || dest_port > 65535) {
-        pr_err("tun: invalid dest_port: %d (must be 1-65535)\n", dest_port);
+        pr_err("tnet: invalid dest_port: %d (must be 1-65535)\n", dest_port);
         free_netdev(tdev);
         return -EINVAL;
     }
@@ -325,15 +327,15 @@ static int __init minit(void)
     tun->dport = htons(dest_port);
 
     if (src_port < 0 || src_port > 65535) {
-        pr_err("tun: invalid src_port: %d (must be 0-65535)\n", src_port);
+        pr_err("tnet: invalid src_port: %d (must be 0-65535)\n", src_port);
         free_netdev(tdev);
         return -EINVAL;
     }
 
     WRITE_ONCE(tun->sock, sock_init(htons(src_port)));
-    if (IS_ERR(tun->sock)) {
+    if (IS_ERR(READ_ONCE(tun->sock))) {
         err = PTR_ERR(tun->sock);
-        pr_err("tun: sock init failed: %d\n", err);
+        pr_err("tnet: sock init failed: %d\n", err);
         free_netdev(tdev);
         return err;
     }
@@ -342,7 +344,7 @@ static int __init minit(void)
 
     if (IS_ERR(tun->ips)) {
         err = PTR_ERR(tun->ips);
-        pr_err("tun: ips failed: %d\n", err);
+        pr_err("tnet: ips failed: %d\n", err);
         sock_close(tun->sock);
         free_netdev(tdev);
         return err;
@@ -350,7 +352,7 @@ static int __init minit(void)
 
     err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
-        pr_err("tun: failed to allocate tx fifo: %d\n", err);
+        pr_err("tnet: failed to allocate tx fifo: %d\n", err);
         ips_close(tun->ips);
         sock_close(tun->sock);
         free_netdev(tdev);
@@ -359,7 +361,7 @@ static int __init minit(void)
 
     err = register_netdev(tdev);
     if (err) {
-        pr_err("tun: failed to register net device: %d\n", err);
+        pr_err("tnet: failed to register net device: %d\n", err);
         kfifo_free(&tun->tx_fifo);
         ips_close(tun->ips);
         sock_close(tun->sock);
@@ -374,7 +376,7 @@ static int __init minit(void)
     sk->sk_user_data = tun;
     write_unlock_bh(&sk->sk_callback_lock);
 
-    pr_info("tun: module loaded, device %s registered\n", tdev->name);
+    pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
 }
 
@@ -388,20 +390,20 @@ static void __exit mexit(void)
 
     unregister_netdev(tdev);
 
-    cancel_work_sync(&tun->tx_work);
-    cancel_work_sync(&tun->rx_work);
-
-    struct sk_buff* skb;
-    while (kfifo_get(&tun->tx_fifo, &skb)) {
-        dev_kfree_skb_any(skb);
-    }
-
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = tun->orig_data_ready;
         sk->sk_user_data = NULL;
         write_unlock_bh(&sk->sk_callback_lock);
+    }
+
+    cancel_work_sync(&tun->tx_work);
+    cancel_work_sync(&tun->rx_work);
+
+    struct sk_buff* skb;
+    while (kfifo_get(&tun->tx_fifo, &skb)) {
+        dev_kfree_skb_any(skb);
     }
 
     kfifo_free(&tun->tx_fifo);
@@ -418,7 +420,7 @@ static void __exit mexit(void)
 
     free_netdev(tdev);
 
-    pr_info("tun: module unloaded\n");
+    pr_info("tnet: module unloaded\n");
 }
 
 module_init(minit);
