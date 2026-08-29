@@ -1,6 +1,6 @@
-obj-m += vnet.o
+obj-m += tnet.o
 
-vnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o utils/impl.o
+tnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o utils/impl.o
 
 ccflags-y += -O2 -I$(src) -I$(src)/sock -I$(src)/crypt -I$(src)/utils
 

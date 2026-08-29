@@ -24,17 +24,17 @@
 #include "configs.h"
 #include "types.h"
 
-#define DEV_NAME "vnet%d"
+#define DEV_NAME "tnet%d"
 
 static char* dest_ip = "";
 static int dest_port = 0;
 static int src_port = 0;
 
-module_param(dest_ip, charp, 0644);
+module_param(dest_ip, charp, 0444);
 MODULE_PARM_DESC(dest_ip, "Destination IP address");
-module_param(dest_port, int, 0644);
+module_param(dest_port, int, 0444);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
-module_param(src_port, int, 0644);
+module_param(src_port, int, 0444);
 MODULE_PARM_DESC(src_port, "Source UDP port");
 
 static struct net_device* tdev;
@@ -46,22 +46,24 @@ static void tx(struct work_struct* work)
     unsigned long flags;
 
     while (true) {
-        if (unlikely(!READ_ONCE(tun->sock))) {
-            break;
-        }
-
         struct net_device* dev = tun->dev;
 
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        spin_lock_irqsave(&tun->send_lock, flags);
-        if (unlikely(!kfifo_get(&tun->send_fifo, &skb))) {
-            spin_unlock_irqrestore(&tun->send_lock, flags);
+        struct socket* sock = READ_ONCE(tun->sock);
+
+        if (unlikely(!sock)) {
             break;
         }
-        spin_unlock_irqrestore(&tun->send_lock, flags);
+
+        spin_lock_irqsave(&tun->tx_lock, flags);
+        if (unlikely(!kfifo_get(&tun->tx_fifo, &skb))) {
+            spin_unlock_irqrestore(&tun->tx_lock, flags);
+            break;
+        }
+        spin_unlock_irqrestore(&tun->tx_lock, flags);
 
         if (unlikely(skb->len < ETH_HLEN)) {
             dev->stats.tx_errors++;
@@ -96,6 +98,7 @@ static void tx(struct work_struct* work)
         struct ips_entry* entry = ips_get(tun->ips, ip);
 
         if (unlikely(IS_ERR_OR_NULL(entry))) {
+            dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             rcu_read_unlock();
             continue;
@@ -117,7 +120,7 @@ static void tx(struct work_struct* work)
             continue;
         }
 
-        int swl = sock_write(READ_ONCE(tun->sock), tun->encrb, enl, dip, dport);
+        int swl = sock_write(sock, tun->encrb, enl, dip, dport);
 
         if (unlikely(swl < 0)) {
             dev->stats.tx_errors++;
@@ -133,16 +136,23 @@ static void tx(struct work_struct* work)
 static void rx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, rx_work);
-    struct net_device* dev = tun->dev;
     __be32 tip;
     __be16 tport;
 
     while (true) {
+        struct net_device* dev = tun->dev;
+
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        int srl = sock_read(READ_ONCE(tun->sock), tun->srb, sizeof(tun->srb), &tip, &tport);
+        struct socket* sock = READ_ONCE(tun->sock);
+
+        if (unlikely(!sock)) {
+            break;
+        }
+
+        int srl = sock_read(sock, tun->srb, sizeof(tun->srb), &tip, &tport);
 
         if (unlikely(srl <= 0)) {
             dev->stats.rx_errors++;
@@ -199,13 +209,13 @@ static void rx(struct work_struct* work)
 
 static void data_ready(struct sock* sk)
 {
-    struct tun_struct* tun = sk->sk_user_data;
+    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
     if (likely(tun)) {
         schedule_work(&tun->rx_work);
     }
 }
 
-static int open(struct net_device* dev)
+static int dopen(struct net_device* dev)
 {
     netif_carrier_on(dev);
     netif_start_queue(dev);
@@ -213,7 +223,7 @@ static int open(struct net_device* dev)
     return 0;
 }
 
-static int stop(struct net_device* dev)
+static int dstop(struct net_device* dev)
 {
     struct tun_struct* tun = netdev_priv(dev);
     struct sk_buff* skb;
@@ -224,7 +234,7 @@ static int stop(struct net_device* dev)
     cancel_work_sync(&tun->tx_work);
     cancel_work_sync(&tun->rx_work);
 
-    while (kfifo_get(&tun->send_fifo, &skb)) {
+    while (kfifo_get(&tun->tx_fifo, &skb)) {
         dev_kfree_skb_any(skb);
     }
 
@@ -232,23 +242,22 @@ static int stop(struct net_device* dev)
     return 0;
 }
 
-static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
+static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_struct* tun = netdev_priv(dev);
     unsigned long flags;
 
-    spin_lock_irqsave(&tun->send_lock, flags);
-    if (unlikely(kfifo_is_full(&tun->send_fifo))) {
-        spin_unlock_irqrestore(&tun->send_lock, flags);
+    spin_lock_irqsave(&tun->tx_lock, flags);
+    if (unlikely(kfifo_is_full(&tun->tx_fifo))) {
+        spin_unlock_irqrestore(&tun->tx_lock, flags);
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
-        pr_warn("tun: send fifo full, tunnel packet dropped\n");
         return NETDEV_TX_OK;
     }
 
-    kfifo_put(&tun->send_fifo, skb);
+    kfifo_put(&tun->tx_fifo, skb);
 
-    spin_unlock_irqrestore(&tun->send_lock, flags);
+    spin_unlock_irqrestore(&tun->tx_lock, flags);
 
     schedule_work(&tun->tx_work);
 
@@ -256,15 +265,13 @@ static netdev_tx_t start_xmit(struct sk_buff* skb, struct net_device* dev)
 }
 
 static const struct net_device_ops ops = {
-    .ndo_open       = open,
-    .ndo_stop       = stop,
-    .ndo_start_xmit = start_xmit,
+    .ndo_open       = dopen,
+    .ndo_stop       = dstop,
+    .ndo_start_xmit = dsxmit,
 };
 
-static void setup(struct net_device* dev)
+static void dsetup(struct net_device* dev)
 {
-    struct tun_struct* tun;
-
     ether_setup(dev);
 
     dev->netdev_ops = &ops;
@@ -278,19 +285,13 @@ static void setup(struct net_device* dev)
     dev->mtu = MTU;
 
     eth_hw_addr_random(dev);
-
-    tun = netdev_priv(dev);
-    spin_lock_init(&tun->send_lock);
-    INIT_KFIFO(tun->send_fifo);
-    INIT_WORK(&tun->tx_work, tx);
-    INIT_WORK(&tun->rx_work, rx);
 }
 
 static int __init minit(void)
 {
     int err;
 
-    tdev = alloc_netdev(sizeof(struct tun_struct), DEV_NAME, NET_NAME_UNKNOWN, setup);
+    tdev = alloc_netdev(sizeof(struct tun_struct), DEV_NAME, NET_NAME_UNKNOWN, dsetup);
     
     if (!tdev) {
         pr_err("tun: failed to allocate net device\n");
@@ -301,9 +302,15 @@ static int __init minit(void)
 
     tun->dev = tdev;
 
+    spin_lock_init(&tun->tx_lock);
+    INIT_KFIFO(tun->tx_fifo);
+    INIT_WORK(&tun->tx_work, tx);
+    INIT_WORK(&tun->rx_work, rx);
+
     __be32 dip;
     if (!in4_pton(dest_ip, -1, (u8*)&dip, -1, NULL)) {
         pr_err("tun: invalid dest_ip: %s\n", dest_ip);
+        free_netdev(tdev);
         return -EINVAL;
     }
 
@@ -311,6 +318,7 @@ static int __init minit(void)
 
     if (dest_port < 1 || dest_port > 65535) {
         pr_err("tun: invalid dest_port: %d (must be 1-65535)\n", dest_port);
+        free_netdev(tdev);
         return -EINVAL;
     }
 
@@ -318,10 +326,11 @@ static int __init minit(void)
 
     if (src_port < 0 || src_port > 65535) {
         pr_err("tun: invalid src_port: %d (must be 0-65535)\n", src_port);
+        free_netdev(tdev);
         return -EINVAL;
     }
 
-    tun->sock = sock_init(htons(src_port));
+    WRITE_ONCE(tun->sock, sock_init(htons(src_port)));
     if (IS_ERR(tun->sock)) {
         err = PTR_ERR(tun->sock);
         pr_err("tun: sock init failed: %d\n", err);
@@ -339,9 +348,9 @@ static int __init minit(void)
         return err;
     }
 
-    err = kfifo_alloc(&tun->send_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
-        pr_err("tun: failed to allocate send fifo: %d\n", err);
+        pr_err("tun: failed to allocate tx fifo: %d\n", err);
         ips_close(tun->ips);
         sock_close(tun->sock);
         free_netdev(tdev);
@@ -351,7 +360,7 @@ static int __init minit(void)
     err = register_netdev(tdev);
     if (err) {
         pr_err("tun: failed to register net device: %d\n", err);
-        kfifo_free(&tun->send_fifo);
+        kfifo_free(&tun->tx_fifo);
         ips_close(tun->ips);
         sock_close(tun->sock);
         free_netdev(tdev);
@@ -383,7 +392,7 @@ static void __exit mexit(void)
     cancel_work_sync(&tun->rx_work);
 
     struct sk_buff* skb;
-    while (kfifo_get(&tun->send_fifo, &skb)) {
+    while (kfifo_get(&tun->tx_fifo, &skb)) {
         dev_kfree_skb_any(skb);
     }
 
@@ -395,7 +404,7 @@ static void __exit mexit(void)
         write_unlock_bh(&sk->sk_callback_lock);
     }
 
-    kfifo_free(&tun->send_fifo);
+    kfifo_free(&tun->tx_fifo);
 
     if (tun->ips) {
         ips_close(tun->ips);
