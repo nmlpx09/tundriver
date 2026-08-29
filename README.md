@@ -26,15 +26,35 @@ rx: UDP recv → decrypt → validate IPv4 → add eth header → netif_rx
 
 Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
-## Build
+## Build & Install
 
 Requires kernel headers installed (`/lib/modules/$(uname -r)/build`).
 
+### Makefile targets
+
+| Target                 | Description |
+|------------------------|-------------|
+| `make client`          | Build `tnet.ko` in client mode |
+| `make server`          | Build `tnet.ko` in server mode (`SERVER=1`) |
+| `make install_client`  | Build client, install `tnet.ko` to `/lib/modules/$(uname -r)/extra/` + `depmod`, install `client.sh` as `/usr/bin/tun` |
+| `make install_server`  | Same for server mode, installs `server.sh` as `/usr/bin/tun` |
+| `make install_service` | `install_server` + install `tunnel.service` as a systemd unit |
+| `make uninstall`       | Remove `/usr/bin/tun`, systemd unit and the module from `/lib/modules`, run `depmod` |
+| `make clean`           | Remove build artifacts |
+
+### Variables
+
+| Variable  | Default               | Description                    |
+|-----------|-----------------------|--------------------------------|
+| `KVER`    | `$(uname -r)`         | Target kernel version          |
+| `DESTDIR` | (empty)               | Packaging root (debs, chroots) |
+
+### Recommended workflow
+
+Build as user, `sudo` only for the copy step (avoids root-owned build artifacts):
+
 ```bash
-make client    # build client mode (default)
-make server    # build server mode (SERVER=1)
-make clean
-make install   # install module + depmod
+make server && sudo make install_server
 ```
 
 ## Module Parameters
@@ -47,23 +67,43 @@ make install   # install module + depmod
 
 ## Usage
 
+After `make install_client` / `make install_server`:
+
 ### Client
 
 ```bash
-sudo ./client.sh c   # connect
-sudo ./client.sh d   # disconnect
+sudo tun c   # connect
+sudo tun d   # disconnect
 ```
 
 ### Server
 
 ```bash
-sudo ./server.sh c   # connect
-sudo ./server.sh d   # disconnect
+tun c   # connect
+tun d   # disconnect
+tun r   # restart tunnel (reload module)
+```
+
+### systemd (server)
+
+After `make install_service`:
+
+```bash
+systemctl daemon-reload    # reload systemd
+systemctl enable tunnel    # enable service
+systemctl start tunnel     # tun c
+systemctl stop tunnel      # tun d
+systemctl reload tunnel    # tun r
+systemctl enable tunnel    # autostart on boot
 ```
 
 ## Source Structure
 
 ```
+Makefile         Build, install/uninstall targets
+client.sh        Client setup script (installed as /usr/bin/tun)
+server.sh        Server setup script (installed as /usr/bin/tun)
+tunnel.service   systemd unit for the server
 main.c          Module init/exit, netdevice ops, tx/rx work queues
 types.h         tun_struct definition
 sock/impl.c     Kernel UDP socket (bind, sendmsg, recvmsg)

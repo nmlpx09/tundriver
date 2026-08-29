@@ -19,17 +19,17 @@ client:
 server:
 	$(MAKE) SERVER=1 -C $(KDIR) M=$(PWD) modules
 
-install_client: client
+install_client:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_NONE=y modules_install
 	depmod -a $(KVER)
 	install -D -m 0755 client.sh $(DESTDIR)/usr/bin/tun
 
-install_server: server
+install_server:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_NONE=y modules_install
 	depmod -a $(KVER)
 	install -D -m 0755 server.sh $(DESTDIR)/usr/bin/tun
 
-install_service: install_server
+install_service:
 	install -D -m 0644 tunnel.service $(DESTDIR)/etc/systemd/system/tunnel.service
 
 uninstall:
