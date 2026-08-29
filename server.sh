@@ -2,11 +2,12 @@
 
 set -exu
 
-REMOTE_IP=66.248.207.187
-REMOTE_PORT=69
-
 TUN_DEVICE=tnet0
-TUN_IP=10.0.3.2
+TUN_IP=10.0.3.1
+TUN_MTU=1472
+
+LOCAL_DEVICE=`ip route get 1.1.1.1 | head -1 | cut -d ' ' -f 5`
+LOCAL_PORT=69
 
 MODULE=tnet.ko
 
@@ -26,23 +27,24 @@ function add_rules {
     ip address add $TUN_IP/24 dev $TUN_DEVICE
     ip link set $TUN_DEVICE up
 
-    ip route add $REMOTE_IP `ip route | grep '^default' | cut -d ' ' -f 2-`
-    ip route add 128.0.0.0/1 dev $TUN_DEVICE
-    ip route add 0.0.0.0/1 dev $TUN_DEVICE
+    sysctl net.ipv4.ip_forward=1
+
+    iptables -t nat -A POSTROUTING -s $TUN_IP/24 -o $LOCAL_DEVICE -j MASQUERADE
 }
 
 function remove_rules {
-    ip route del $REMOTE_IP
+    iptables -t nat -D POSTROUTING -s $TUN_IP/24 -o $LOCAL_DEVICE -j MASQUERADE
+    sysctl net.ipv4.ip_forward=0
 }
 
 function check_vars {
     local empty_vars=()
 
-    [[ -z $REMOTE_IP ]]   && empty_vars+=(REMOTE_IP)
-    [[ -z $REMOTE_PORT ]] && empty_vars+=(REMOTE_PORT)
-    [[ -z $TUN_DEVICE ]]  && empty_vars+=(TUN_DEVICE)
-    [[ -z $TUN_IP ]]      && empty_vars+=(TUN_IP)
-    [[ -z $MODULE ]]      && empty_vars+=(MODULE)
+    [[ -z $TUN_DEVICE ]] && empty_vars+=(TUN_DEVICE)
+    [[ -z $TUN_IP ]]     && empty_vars+=(TUN_IP)
+    [[ -z $LOCAL_DEVICE ]] && empty_vars+=(LOCAL_DEVICE)
+    [[ -z $LOCAL_PORT ]] && empty_vars+=(LOCAL_PORT)
+    [[ -z $MODULE ]]     && empty_vars+=(MODULE)
 
     if [[ ${#empty_vars[@]} -gt 0 ]]; then
         echo "empty vars: ${empty_vars[*]}"
@@ -57,7 +59,7 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        insmod $MODULE dest_ip=$REMOTE_IP dest_port=$REMOTE_PORT
+        insmod $MODULE src_port=$LOCAL_PORT
 
         if [ $? -ne 0 ]; then
             echo "tun not start"
@@ -72,8 +74,6 @@ case $1 in
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
         rmmod $MODULE
-
-        remove_rules || :
         ;;
     *)
         echo "Usage: $0 {c|d}"

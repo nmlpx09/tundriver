@@ -23,8 +23,8 @@
 #define MTU MAX_BUFFER_SIZE
 #define SEND_FIFO_SIZE 4096
 
-static char* dest_ip = "";
-static int dest_port = 0;
+static char* dest_ip = "0.0.0.0";
+static int dest_port = 1;
 static int src_port = 0;
 
 module_param(dest_ip, charp, 0444);
