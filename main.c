@@ -257,9 +257,12 @@ static int dstop(struct net_device* dev)
     cancel_work_sync(&tun->tx_work);
     cancel_work_sync(&tun->rx_work);
 
+    unsigned long flags = 0;
+    spin_lock_irqsave(&tun->tx_lock, flags);
     while (kfifo_get(&tun->tx_fifo, &skb)) {
         dev_kfree_skb_any(skb);
     }
+    spin_unlock_irqrestore(&tun->tx_lock, flags);
 
     pr_info("tnet: device stopped\n");
     return 0;
@@ -405,9 +408,10 @@ static void __exit mexit(void)
     }
 
     struct tun_struct* tun = netdev_priv(tdev);
+    struct socket* sock = READ_ONCE(tun->sock);
 
-    if (tun->sock) {
-        struct sock* sk = tun->sock->sk;
+    if (sock) {
+        struct sock* sk = sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = tun->orig_data_ready;
         sk->sk_user_data = NULL;
@@ -416,8 +420,8 @@ static void __exit mexit(void)
 
     unregister_netdev(tdev);
 
-    cancel_work_sync(&tun->tx_work);
-    cancel_work_sync(&tun->rx_work);
+    disable_work_sync(&tun->tx_work);
+    disable_work_sync(&tun->rx_work);
 
     struct sk_buff* skb;
     while (kfifo_get(&tun->tx_fifo, &skb)) {
@@ -432,7 +436,6 @@ static void __exit mexit(void)
         ips_close(ips);
     }
 
-    struct socket* sock = READ_ONCE(tun->sock);
     if (sock) {
         WRITE_ONCE(tun->sock, NULL);
         sock_close(sock);
