@@ -350,23 +350,19 @@ static int __init minit(void)
     INIT_WORK(&tun->tx_work, tx);
     INIT_WORK(&tun->rx_work, rx);
 
-    struct socket* sock = sock_init(htons(src_port));
-    if (IS_ERR(sock)) {
-        err = PTR_ERR(sock);
+    tun->sock = sock_init(htons(src_port));
+    if (IS_ERR(tun->sock)) {
+        err = PTR_ERR(tun->sock);
         pr_err("tnet: sock init failed: %d\n", err);
         goto err_netdev;
     }
 
-    WRITE_ONCE(tun->sock, sock);
-
-    struct ips_storage* ips = ips_init();
-    if (IS_ERR(ips)) {
-        err = PTR_ERR(ips);
+    tun->ips = ips_init();
+    if (IS_ERR(tun->ips)) {
+        err = PTR_ERR(tun->ips);
         pr_err("tnet: ips init failed: %d\n", err);
         goto err_sock;
     }
-
-    WRITE_ONCE(tun->ips, ips);
 
     err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
     if (err) {
