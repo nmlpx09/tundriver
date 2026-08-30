@@ -417,10 +417,9 @@ static void __exit mexit(void)
     }
 
     struct tun_struct* tun = netdev_priv(tdev);
-    struct socket* sock = READ_ONCE(tun->sock);
 
-    if (sock) {
-        struct sock* sk = sock->sk;
+    if (tun->sock) {
+        struct sock* sk = tun->sock->sk;
         write_lock_bh(&sk->sk_callback_lock);
         sk->sk_data_ready = tun->orig_data_ready;
         sk->sk_user_data = NULL;
@@ -444,15 +443,14 @@ static void __exit mexit(void)
 
     kfifo_free(&tun->tx_fifo);
 
-    struct ips_storage* ips = READ_ONCE(tun->ips);
-    if (ips) {
-        WRITE_ONCE(tun->ips, NULL);
-        ips_close(ips);
+    if (tun->ips) {
+        ips_close(tun->ips);
+        tun->ips = NULL;
     }
 
-    if (sock) {
-        WRITE_ONCE(tun->sock, NULL);
-        sock_close(sock);
+    if (tun->sock) {
+        sock_close(tun->sock);
+        tun->sock = NULL;
     }
 
     free_netdev(tdev);
