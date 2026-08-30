@@ -59,11 +59,6 @@ case $1 in
 
         modprobe $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT
 
-        if [ $? -ne 0 ]; then
-            echo "tun not start"
-            exit 1
-        fi
-
         add_rules
         ;;
 

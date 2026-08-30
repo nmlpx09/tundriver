@@ -234,7 +234,7 @@ static void dready(struct sock* sk)
 {
     struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
     if (likely(tun)) {
-        schedule_work(&tun->rx_work);
+        queue_work(tun->wq, &tun->rx_work);
     }
 }
 
@@ -285,7 +285,7 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 
     spin_unlock_irqrestore(&tun->tx_lock, flags);
 
-    schedule_work(&tun->tx_work);
+    queue_work(tun->wq, &tun->tx_work);
 
     return NETDEV_TX_OK;
 }
@@ -374,10 +374,17 @@ static int __init minit(void)
         goto err_ips;
     }
 
+    tun->wq = alloc_workqueue("tnet", WQ_UNBOUND, 0);
+    if (!tun->wq) {
+        pr_err("tnet: failed to allocate workqueue\n");
+        err = -ENOMEM;
+        goto err_fifo;
+    }
+
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
-        goto err_fifo;
+        goto err_wq;
     }
 
     struct sock* sk = tun->sock->sk;
@@ -390,6 +397,8 @@ static int __init minit(void)
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
 
+err_wq:
+    destroy_workqueue(tun->wq);
 err_fifo:
     kfifo_free(&tun->tx_fifo);
 err_ips:
@@ -422,6 +431,11 @@ static void __exit mexit(void)
 
     disable_work_sync(&tun->tx_work);
     disable_work_sync(&tun->rx_work);
+
+    if (tun->wq) {
+        destroy_workqueue(tun->wq);
+        tun->wq = NULL;
+    }
 
     struct sk_buff* skb;
     while (kfifo_get(&tun->tx_fifo, &skb)) {

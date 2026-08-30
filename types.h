@@ -25,6 +25,7 @@ struct tun_struct {
 
     DECLARE_KFIFO_PTR(tx_fifo, struct sk_buff*);
     spinlock_t tx_lock;
+    struct workqueue_struct* wq;
     struct work_struct tx_work;
 
     struct work_struct rx_work;

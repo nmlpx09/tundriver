@@ -7,7 +7,7 @@ obj-m += tnet.o
 
 tnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o utils/impl.o
 
-ccflags-y += -O2 -I$(src) -I$(src)/sock -I$(src)/crypt -I$(src)/ips -I$(src)/utils
+ccflags-y += -I$(src) -I$(src)/sock -I$(src)/crypt -I$(src)/ips -I$(src)/utils
 
 ifdef SERVER
 ccflags-y += -DSERVER
@@ -19,14 +19,14 @@ client:
 server:
 	$(MAKE) SERVER=1 -C $(KDIR) M=$(PWD) modules
 
-install_client:
+install_module:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_NONE=y modules_install
 	depmod -a $(KVER)
+
+install_client:
 	install -D -m 0755 client.sh $(DESTDIR)/usr/bin/tun
 
 install_server:
-	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_NONE=y modules_install
-	depmod -a $(KVER)
 	install -D -m 0755 server.sh $(DESTDIR)/usr/bin/tun
 
 install_service:
@@ -41,4 +41,4 @@ uninstall:
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
-.PHONY: client server install_client install_server install_service uninstall clean
+.PHONY: client server install_client install_server install_service install_module uninstall clean

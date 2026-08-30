@@ -60,11 +60,6 @@ case $1 in
 
         modprobe $MODULE src_port=$SRC_PORT
 
-        if [ $? -ne 0 ]; then
-            echo "tun not start"
-            exit 1
-        fi
-
         add_rules
         ;;
 
@@ -81,11 +76,6 @@ case $1 in
 
         modprobe -r $MODULE
         modprobe $MODULE src_port=$SRC_PORT
-
-        if [ $? -ne 0 ]; then
-            echo "tun not start"
-            exit 1
-        fi
 
         add_rules
 
