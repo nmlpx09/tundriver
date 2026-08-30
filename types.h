@@ -23,9 +23,10 @@ struct tun_struct {
     struct socket* sock;
     u8 srb[MAX_BUFFER_SIZE];
 
+    struct workqueue_struct* wq;
+
     DECLARE_KFIFO_PTR(tx_fifo, struct sk_buff*);
     spinlock_t tx_lock;
-    struct workqueue_struct* wq;
     struct work_struct tx_work;
 
     struct work_struct rx_work;
