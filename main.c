@@ -126,15 +126,13 @@ static void tx(struct work_struct* work)
         __be16 dport = tun->dport;
     #endif
 
-        int enl = encrypt(tun->encrb, sizeof(tun->encrb), buf, bufl);
-
-        if (unlikely(enl <= 0)) {
+        if (unlikely(encrypt(buf, bufl) < 0)) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        int swl = sock_write(sock, tun->encrb, enl, dip, dport);
+        int swl = sock_write(sock, buf, bufl, dip, dport);
 
         if (unlikely(swl < 0)) {
             dev->stats.tx_errors++;
@@ -175,20 +173,18 @@ static void rx(struct work_struct* work)
             break;
         }
 
-        int dcl = decrypt(tun->decrb, sizeof(tun->decrb), tun->srb, srl);
-
-        if (unlikely(dcl <= 0)) {
+        if (unlikely(decrypt(tun->srb, srl) < 0)) {
             dev->stats.rx_errors++;
             continue;
         }
 
-        if (unlikely(!valid_ipv4_packet(tun->decrb, dcl))) {
+        if (unlikely(!valid_ipv4_packet(tun->srb, srl))) {
             dev->stats.rx_dropped++;
             continue;
         }
 
     #ifdef SERVER
-        __be32 sip = get_src_ip_from_ipv4_packet(tun->decrb, dcl);
+        __be32 sip = get_src_ip_from_ipv4_packet(tun->srb, srl);
         if (unlikely(!sip)) {
             dev->stats.rx_dropped++;
             continue;
@@ -204,7 +200,7 @@ static void rx(struct work_struct* work)
         ips_add(ips, sip, tip, tport);
     #endif
 
-        struct sk_buff* skb = netdev_alloc_skb(dev, dcl + ETH_HLEN + NET_IP_ALIGN);
+        struct sk_buff* skb = netdev_alloc_skb(dev, srl + ETH_HLEN + NET_IP_ALIGN);
         if (unlikely(!skb)) {
             dev->stats.rx_errors++;
             continue;
@@ -217,7 +213,7 @@ static void rx(struct work_struct* work)
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
 
-        skb_put_data(skb, tun->decrb, dcl);
+        skb_put_data(skb, tun->srb, srl);
 
         skb->dev = dev;
         skb->protocol = eth_type_trans(skb, dev);

@@ -10,7 +10,7 @@
 
 #include <linux/types.h>
 
-int encrypt(u8* rb, size_t rl, u8* sb, size_t sl);
-int decrypt(u8* rb, size_t rl, u8* sb, size_t sl);
+int encrypt(u8* buf, size_t bufl);
+int decrypt(u8* buf, size_t bufl);
 
 #endif

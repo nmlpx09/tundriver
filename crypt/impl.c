@@ -11,36 +11,28 @@
 #include "impl.h"
 #include "table.h"
 
-int encrypt(u8* rb, size_t rl, u8* sb, size_t sl)
+int encrypt(u8* buf, size_t bufl)
 {
-    if (unlikely(!rb || !sb)) {
+    if (unlikely(!buf)) {
         return -EINVAL;
     }
 
-    if (unlikely(rl < sl)) {
-        return 0;
+    for (size_t i = 0; i < bufl; ++i) {
+        buf[i] = ENCRYPT_TABLE[buf[i]];
     }
 
-    for (size_t i = 0; i < sl; ++i) {
-        rb[i] = ENCRYPT_TABLE[sb[i]];
-    }
-
-    return sl;
+    return 1;
 }
 
-int decrypt(u8* rb, size_t rl, u8* sb, size_t sl)
+int decrypt(u8* buf, size_t bufl)
 {
-    if (unlikely(!rb || !sb)) {
+    if (unlikely(!buf)) {
         return -EINVAL;
     }
 
-    if (unlikely(rl < sl)) {
-        return 0;
+    for (size_t i = 0; i < bufl; ++i) {
+        buf[i] = DECRYPT_TABLE[buf[i]];
     }
 
-    for (size_t i = 0; i < sl; ++i) {
-        rb[i] = DECRYPT_TABLE[sb[i]];
-    }
-
-    return sl;
+    return 1;
 }

@@ -32,9 +32,6 @@ struct tun_struct {
     struct work_struct rx_work;
     void (*orig_data_ready)(struct sock* sk);
 
-    u8 encrb[MAX_BUFFER_SIZE];
-    u8 decrb[MAX_BUFFER_SIZE];
-
     struct ips_storage* ips;
 
     __be32 dip;
