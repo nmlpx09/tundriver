@@ -69,29 +69,26 @@ static void tx(struct work_struct* work)
         }
         spin_unlock_irqrestore(&tun->tx_lock, flags);
 
-        if (unlikely(skb->len < ETH_HLEN)) {
-            dev->stats.tx_errors++;
-            dev_kfree_skb_any(skb);
-            continue;
-        }
-
         if (unlikely(skb_linearize(skb))) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        u8* buf = skb->data + ETH_HLEN;
-        size_t bufl = skb->len - ETH_HLEN;
+        if (unlikely(!skb_pull(skb, ETH_HLEN))) {
+            dev->stats.tx_errors++;
+            dev_kfree_skb_any(skb);
+            continue;
+        }
 
-        if (unlikely(!valid_ipv4_packet(buf, bufl))) {
+        if (unlikely(!valid_ipv4_packet(skb->data, skb->len))) {
             dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
     #ifdef SERVER
-        __be32 ip = get_dst_ip_from_ipv4_packet(buf, bufl);
+        __be32 ip = get_dst_ip_from_ipv4_packet(skb->data, skb->len);
         if (unlikely(!ip)) {
             dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
@@ -126,13 +123,13 @@ static void tx(struct work_struct* work)
         __be16 dport = tun->dport;
     #endif
 
-        if (unlikely(encrypt(buf, bufl) < 0)) {
+        if (unlikely(encrypt(skb->data, skb->len) < 0)) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        int swl = sock_write(sock, buf, bufl, dip, dport);
+        int swl = sock_write(sock, skb->data, skb->len, dip, dport);
 
         if (unlikely(swl < 0)) {
             dev->stats.tx_errors++;

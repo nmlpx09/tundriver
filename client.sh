@@ -2,7 +2,7 @@
 
 set -exu
 
-DEST_IP=
+DEST_IP=139.60.162.149
 DEST_PORT=69
 
 TUN_DEVICE=tnet0
