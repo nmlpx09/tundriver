@@ -75,8 +75,9 @@ case $1 in
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
         modprobe -r $MODULE
-        modprobe $MODULE src_port=$SRC_PORT
+        remove_rules
 
+        modprobe $MODULE src_port=$SRC_PORT
         add_rules
 
         ;;

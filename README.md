@@ -119,8 +119,6 @@ crypt/table.h   256-byte encrypt/decrypt lookup tables
 ips/impl.c      IPS table (RCU hashtable, add/get/expire)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
-utils/impl.c    IPv4 packet validation and IP extraction
-utils/impl.h
 ```
 
 ## Configuration

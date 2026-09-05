@@ -83,7 +83,7 @@ static void tx(struct work_struct* work)
 
         skb_reset_network_header(skb);
 
-        if (unlikely(ip_hdr(skb)->version != 4)) {
+        if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
             dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
@@ -185,7 +185,7 @@ static void rx(struct work_struct* work)
             continue;
         }
 
-        if (unlikely(ip_hdr(skb)->version != 4)) {
+        if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
             dev->stats.rx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
@@ -334,7 +334,7 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_GSO;
     dev->features &= ~NETIF_F_GRO;
     dev->mtu = MTU;
-    dev->needed_headroom = sizeof(struct iphdr) + sizeof(struct udphdr);
+    dev->needed_headroom = LL_RESERVED_SPACE(dev) + sizeof(struct iphdr) + sizeof(struct udphdr);
 
     eth_hw_addr_random(dev);
 }
