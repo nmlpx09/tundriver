@@ -5,7 +5,7 @@ DESTDIR ?=
 
 obj-m += tnet.o
 
-tnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o utils/impl.o
+tnet-y := main.o sock/impl.o crypt/impl.o ips/impl.o
 
 ccflags-y += -I$(src)
 

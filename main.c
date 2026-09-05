@@ -29,7 +29,6 @@
 #include <crypt/impl.h>
 #include <ips/impl.h>
 #include <sock/impl.h>
-#include <utils/impl.h>
 
 #include "types.h"
 
@@ -82,20 +81,15 @@ static void tx(struct work_struct* work)
             continue;
         }
 
-        if (unlikely(!valid_ipv4_packet(skb->data, skb->len))) {
+        skb_reset_network_header(skb);
+
+        if (unlikely(ip_hdr(skb)->version != 4)) {
             dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
     #ifdef SERVER
-        __be32 ip = get_dst_ip_from_ipv4_packet(skb->data, skb->len);
-        if (unlikely(!ip)) {
-            dev->stats.tx_dropped++;
-            dev_kfree_skb_any(skb);
-            continue;
-        }
-
         rcu_read_lock();
 
         struct ips_storage* ips = READ_ONCE(tun->ips);
@@ -107,7 +101,7 @@ static void tx(struct work_struct* work)
             break;
         }
 
-        struct ips_entry* entry = ips_get(ips, ip);
+        struct ips_entry* entry = ips_get(ips, ip_hdr(skb)->daddr);
 
         if (unlikely(IS_ERR_OR_NULL(entry))) {
             dev->stats.tx_errors++;
@@ -180,28 +174,24 @@ static void rx(struct work_struct* work)
             continue;
         }
 
+        [[ maybe_unused ]] __be32 tip = ip_hdr(skb)->saddr;
+        [[ maybe_unused ]] __be16 tport = udp_hdr(skb)->source;
+
+        skb_reset_network_header(skb);
+
         if (unlikely(decrypt(skb->data, skb->len) < 0)) {
             dev->stats.rx_errors++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        if (unlikely(!valid_ipv4_packet(skb->data, skb->len))) {
+        if (unlikely(ip_hdr(skb)->version != 4)) {
             dev->stats.rx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
     #ifdef SERVER
-        __be32 tip = ip_hdr(skb)->saddr;
-        __be16 tport = udp_hdr(skb)->source;
-        __be32 sip = get_src_ip_from_ipv4_packet(skb->data, skb->len);
-        if (unlikely(!sip)) {
-            dev->stats.rx_dropped++;
-            dev_kfree_skb_any(skb);
-            continue;
-        }
-
         struct ips_storage* ips = READ_ONCE(tun->ips);
 
         if (unlikely(!ips)) {
@@ -210,7 +200,7 @@ static void rx(struct work_struct* work)
             break;
         }
 
-        ips_add(ips, sip, tip, tport);
+        ips_add(ips, ip_hdr(skb)->saddr, tip, tport);
     #endif
 
         if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
