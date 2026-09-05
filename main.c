@@ -53,7 +53,6 @@ static void tx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, tx_work);
     struct sk_buff* skb = NULL;
-    unsigned long flags = 0;
 
     while (true) {
         struct net_device* dev = tun->dev;
@@ -62,12 +61,12 @@ static void tx(struct work_struct* work)
             break;
         }
 
-        spin_lock_irqsave(&tun->tx_lock, flags);
+        spin_lock_bh(&tun->tx_lock);
         if (unlikely(!kfifo_get(&tun->tx_fifo, &skb))) {
-            spin_unlock_irqrestore(&tun->tx_lock, flags);
+            spin_unlock_bh(&tun->tx_lock);
             break;
         }
-        spin_unlock_irqrestore(&tun->tx_lock, flags);
+        spin_unlock_bh(&tun->tx_lock);
 
         if (unlikely(skb_linearize(skb))) {
             dev->stats.tx_errors++;
@@ -148,19 +147,18 @@ static void rx(struct work_struct* work)
     struct tun_struct* tun = container_of(work, struct tun_struct, rx_work);
     struct net_device* dev = tun->dev;
     struct sk_buff* skb = NULL;
-    unsigned long flags;
 
     while (true) {
         if (unlikely(!netif_running(dev))) {
             break;
         }
 
-        spin_lock_irqsave(&tun->rx_lock, flags);
+        spin_lock_bh(&tun->rx_lock);
         if (unlikely(!kfifo_get(&tun->rx_fifo, &skb))) {
-            spin_unlock_irqrestore(&tun->rx_lock, flags);
+            spin_unlock_bh(&tun->rx_lock);
             break;
         }
-        spin_unlock_irqrestore(&tun->rx_lock, flags);
+        spin_unlock_bh(&tun->rx_lock);
 
         if (unlikely(skb_linearize(skb))) {
             dev->stats.rx_dropped++;
@@ -247,11 +245,10 @@ static int dstop(struct net_device* dev)
 static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_struct* tun = netdev_priv(dev);
-    unsigned long flags;
 
-    spin_lock_irqsave(&tun->tx_lock, flags);
+    spin_lock_bh(&tun->tx_lock);
     if (unlikely(kfifo_is_full(&tun->tx_fifo))) {
-        spin_unlock_irqrestore(&tun->tx_lock, flags);
+        spin_unlock_bh(&tun->tx_lock);
         dev_kfree_skb_any(skb);
         dev->stats.tx_dropped++;
         return NETDEV_TX_OK;
@@ -259,9 +256,11 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 
     kfifo_put(&tun->tx_fifo, skb);
 
-    spin_unlock_irqrestore(&tun->tx_lock, flags);
+    spin_unlock_bh(&tun->tx_lock);
 
-    queue_work(tun->wq, &tun->tx_work);
+    if (unlikely(!work_pending(&tun->tx_work))) {
+        queue_work(tun->wq, &tun->tx_work);
+    }
 
     return NETDEV_TX_OK;
 }
@@ -270,7 +269,6 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 static int tenrecv(struct sock* sk, struct sk_buff* skb)
 {
     struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
-    unsigned long flags;
 
     if (unlikely(!tun)) {
         dev_kfree_skb_any(skb);
@@ -279,9 +277,9 @@ static int tenrecv(struct sock* sk, struct sk_buff* skb)
 
     struct net_device* dev = tun->dev;
 
-    spin_lock_irqsave(&tun->rx_lock, flags);
+    spin_lock_bh(&tun->rx_lock);
     if (unlikely(kfifo_is_full(&tun->rx_fifo))) {
-        spin_unlock_irqrestore(&tun->rx_lock, flags);
+        spin_unlock_bh(&tun->rx_lock);
         dev->stats.rx_dropped++;
         dev_kfree_skb_any(skb);
         return 0;
@@ -289,9 +287,11 @@ static int tenrecv(struct sock* sk, struct sk_buff* skb)
 
     kfifo_put(&tun->rx_fifo, skb);
 
-    spin_unlock_irqrestore(&tun->rx_lock, flags);
+    spin_unlock_bh(&tun->rx_lock);
 
-    queue_work(tun->wq, &tun->rx_work);
+    if (unlikely(!work_pending(&tun->rx_work))) {
+        queue_work(tun->wq, &tun->rx_work);
+    }
 
     return 0;
 }
