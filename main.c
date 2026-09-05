@@ -118,7 +118,7 @@ static void tx(struct work_struct* work)
         __be16 dport = tun->dport;
     #endif
 
-        if (unlikely(encrypt(skb->data, skb->len) < 0)) {
+        if (unlikely(encrypt(skb->data, skb->len))) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             continue;
@@ -179,7 +179,7 @@ static void rx(struct work_struct* work)
 
         skb_reset_network_header(skb);
 
-        if (unlikely(decrypt(skb->data, skb->len) < 0)) {
+        if (unlikely(decrypt(skb->data, skb->len))) {
             dev->stats.rx_errors++;
             dev_kfree_skb_any(skb);
             continue;
@@ -237,27 +237,8 @@ static int dopen(struct net_device* dev)
 
 static int dstop(struct net_device* dev)
 {
-    struct tun_struct* tun = netdev_priv(dev);
-    struct sk_buff* skb;
-
     netif_stop_queue(dev);
     netif_carrier_off(dev);
-
-    cancel_work_sync(&tun->tx_work);
-    cancel_work_sync(&tun->rx_work);
-
-    unsigned long flags = 0;
-    spin_lock_irqsave(&tun->tx_lock, flags);
-    while (kfifo_get(&tun->tx_fifo, &skb)) {
-        dev_kfree_skb_any(skb);
-    }
-    spin_unlock_irqrestore(&tun->tx_lock, flags);
-
-    spin_lock_irqsave(&tun->rx_lock, flags);
-    while (kfifo_get(&tun->rx_fifo, &skb)) {
-        dev_kfree_skb_any(skb);
-    }
-    spin_unlock_irqrestore(&tun->rx_lock, flags);
 
     pr_info("tnet: device stopped\n");
     return 0;
@@ -417,13 +398,13 @@ static int __init minit(void)
         goto err_wq;
     }
 
-    struct sock* sk = tun->sock->sk;
-    lock_sock(sk);
-    sk->sk_user_data = tun;
-    udp_encap_enable();
-    udp_sk(sk)->encap_rcv = tenrecv;
-    udp_sk(sk)->encap_type = 1;
-    release_sock(sk);
+    struct udp_tunnel_sock_cfg sock_cfg = {
+        .sk_user_data = tun,
+        .encap_type = 1,
+        .encap_rcv = tenrecv,
+    };
+
+    sock_setup(tun->sock, &sock_cfg);
 
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
@@ -457,7 +438,6 @@ static void __exit mexit(void)
         WRITE_ONCE(udp_sk(sk)->encap_rcv, NULL);
         WRITE_ONCE(sk->sk_user_data, NULL);
         release_sock(sk);
-        udp_encap_disable();
         synchronize_net();
     }
 

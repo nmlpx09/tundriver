@@ -82,6 +82,6 @@ case $1 in
 
         ;;
     *)
-        echo "Usage: $0 {c|d}"
+        echo "Usage: $0 {c|d|r}"
         ;;
 esac

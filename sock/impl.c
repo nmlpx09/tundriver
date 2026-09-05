@@ -15,6 +15,7 @@
 #include <net/dst.h>
 #include <net/flow.h>
 #include <net/inet_sock.h>
+#include <net/ip.h>
 #include <net/net_namespace.h>
 #include <net/route.h>
 #include <net/sock.h>
@@ -24,26 +25,24 @@
 
 struct socket* sock_init(__be16 port)
 {
-    struct socket* sock;
-
-    int err = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
-    if (err) {
-        return ERR_PTR(err);
-    }
-
-    struct sockaddr_in src_addr = {
-        .sin_family = AF_INET,
-        .sin_port = port,
-        .sin_addr = { .s_addr = htonl(INADDR_ANY) }
+    struct udp_port_cfg cfg = {
+        .family = AF_INET,
+        .local_udp_port = port,
+        .local_ip.s_addr = htonl(INADDR_ANY),
     };
 
-    err = kernel_bind(sock, (struct sockaddr*)&src_addr, sizeof(src_addr));
+    struct socket* sock;
+    int err = udp_sock_create4(&init_net, &cfg, &sock);
     if (err) {
-        sock_release(sock);
         return ERR_PTR(err);
     }
 
     return sock;
+}
+
+void sock_setup(struct socket* sock, struct udp_tunnel_sock_cfg* cfg)
+{
+    setup_udp_tunnel_sock(&init_net, sock, cfg);
 }
 
 void sock_close(struct socket* sock)
@@ -52,7 +51,7 @@ void sock_close(struct socket* sock)
         return;
     }
 
-    sock_release(sock);
+    udp_tunnel_sock_release(sock);
 }
 
 int sock_send(struct socket* sock, struct sk_buff* skb, __be32 dip, __be16 dport)

@@ -21,7 +21,7 @@ int encrypt(u8* buf, size_t bufl)
         buf[i] = ENCRYPT_TABLE[buf[i]];
     }
 
-    return 1;
+    return 0;
 }
 
 int decrypt(u8* buf, size_t bufl)
@@ -34,5 +34,5 @@ int decrypt(u8* buf, size_t bufl)
         buf[i] = DECRYPT_TABLE[buf[i]];
     }
 
-    return 1;
+    return 0;
 }
