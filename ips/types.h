@@ -9,7 +9,6 @@
 #define IPS_TYPES_H
 
 #include <linux/hashtable.h>
-#include <linux/ktime.h>
 #include <linux/rcupdate.h>
 #include <linux/types.h>
 

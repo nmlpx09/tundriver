@@ -8,20 +8,19 @@
 #ifndef TYPES_H
 #define TYPES_H
 
-#include <linux/netdevice.h>
 #include <linux/kfifo.h>
-#include <linux/socket.h>
+#include <linux/netdevice.h>
+#include <linux/skbuff.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 
 #include <ips/types.h>
-
-#define MAX_BUFFER_SIZE 1472
 
 struct tun_struct {
     struct net_device* dev;
 
     struct socket* sock;
-    u8 srb[MAX_BUFFER_SIZE];
 
     struct workqueue_struct* wq;
 
@@ -29,8 +28,9 @@ struct tun_struct {
     spinlock_t tx_lock;
     struct work_struct tx_work;
 
+    DECLARE_KFIFO_PTR(rx_fifo, struct sk_buff*);
+    spinlock_t rx_lock;
     struct work_struct rx_work;
-    void (*orig_data_ready)(struct sock* sk);
 
     struct ips_storage* ips;
 

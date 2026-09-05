@@ -8,7 +8,6 @@
 #ifndef IPS_IMPL_H
 #define IPS_IMPL_H
 
-#include <linux/err.h>
 #include <linux/types.h>
 
 #include "types.h"

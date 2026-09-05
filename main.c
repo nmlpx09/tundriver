@@ -11,13 +11,20 @@
 #include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <linux/inet.h>
+#include <linux/ip.h>
+#include <linux/kernel.h>
+#include <linux/kfifo.h>
 #include <linux/module.h>
+#include <linux/netdevice.h>
 #include <linux/printk.h>
+#include <linux/rcupdate.h>
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/udp.h>
 #include <linux/workqueue.h>
 #include <net/sock.h>
+#include <net/udp.h>
 
 #include <crypt/impl.h>
 #include <ips/impl.h>
@@ -27,7 +34,7 @@
 #include "types.h"
 
 #define DEV_NAME "tnet%d"
-#define MTU MAX_BUFFER_SIZE
+#define MTU 1472
 #define SEND_FIFO_SIZE 4096
 
 static char* dest_ip = "0.0.0.0";
@@ -129,27 +136,24 @@ static void tx(struct work_struct* work)
             continue;
         }
 
-        int swl = sock_write(sock, skb->data, skb->len, dip, dport);
-
-        if (unlikely(swl < 0)) {
+        if (unlikely(sock_send(sock, skb, dip, dport))) {
             dev->stats.tx_errors++;
+            dev_kfree_skb_any(skb);
         } else {
             dev->stats.tx_packets++;
-            dev->stats.tx_bytes += swl;
+            dev->stats.tx_bytes += skb->len;
         }
-
-        dev_kfree_skb_any(skb);
     }
 }
 
 static void rx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, rx_work);
-    __be32 tip = 0;
-    __be16 tport = 0;
+    struct net_device* dev = tun->dev;
+    struct sk_buff* skb = NULL;
+    unsigned long flags;
 
     while (true) {
-        struct net_device* dev = tun->dev;
 
         if (unlikely(!netif_running(dev))) {
             break;
@@ -161,29 +165,44 @@ static void rx(struct work_struct* work)
             break;
         }
 
-        int srl = sock_read(sock, tun->srb, sizeof(tun->srb), &tip, &tport);
-
-        if (unlikely(srl < 0)) {
-            dev->stats.rx_errors++;
-            break;
-        } else if (unlikely(srl == 0)) {
+        spin_lock_irqsave(&tun->rx_lock, flags);
+        if (unlikely(!kfifo_get(&tun->rx_fifo, &skb))) {
+            spin_unlock_irqrestore(&tun->rx_lock, flags);
             break;
         }
+        spin_unlock_irqrestore(&tun->rx_lock, flags);
 
-        if (unlikely(decrypt(tun->srb, srl) < 0)) {
-            dev->stats.rx_errors++;
+        if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
+            dev->stats.rx_dropped++;
+            dev_kfree_skb_any(skb);
             continue;
         }
 
-        if (unlikely(!valid_ipv4_packet(tun->srb, srl))) {
+        if (unlikely(skb_linearize(skb))) {
             dev->stats.rx_dropped++;
+            dev_kfree_skb_any(skb);
+            continue;
+        }
+
+        if (unlikely(decrypt(skb->data, skb->len) < 0)) {
+            dev->stats.rx_errors++;
+            dev_kfree_skb_any(skb);
+            continue;
+        }
+
+        if (unlikely(!valid_ipv4_packet(skb->data, skb->len))) {
+            dev->stats.rx_dropped++;
+            dev_kfree_skb_any(skb);
             continue;
         }
 
     #ifdef SERVER
-        __be32 sip = get_src_ip_from_ipv4_packet(tun->srb, srl);
+        __be32 tip = ip_hdr(skb)->saddr;
+        __be16 tport = udp_hdr(skb)->source;
+        __be32 sip = get_src_ip_from_ipv4_packet(skb->data, skb->len);
         if (unlikely(!sip)) {
             dev->stats.rx_dropped++;
+            dev_kfree_skb_any(skb);
             continue;
         }
 
@@ -191,26 +210,25 @@ static void rx(struct work_struct* work)
 
         if (unlikely(!ips)) {
             dev->stats.rx_errors++;
-            break;
+            dev_kfree_skb_any(skb);
+            continue;
         }
 
         ips_add(ips, sip, tip, tport);
     #endif
 
-        struct sk_buff* skb = netdev_alloc_skb(dev, srl + ETH_HLEN + NET_IP_ALIGN);
-        if (unlikely(!skb)) {
+        if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
             dev->stats.rx_errors++;
+            dev_kfree_skb_any(skb);
             continue;
         }
 
-        skb_reserve(skb, NET_IP_ALIGN);
+        skb_dst_drop(skb);
 
-        struct ethhdr* eth = skb_put(skb, ETH_HLEN);
+        struct ethhdr* eth = skb_push(skb, ETH_HLEN);
         memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
         memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
         eth->h_proto = htons(ETH_P_IP);
-
-        skb_put_data(skb, tun->srb, srl);
 
         skb->dev = dev;
         skb->protocol = eth_type_trans(skb, dev);
@@ -220,14 +238,6 @@ static void rx(struct work_struct* work)
         dev->stats.rx_bytes += skb->len;
 
         netif_rx(skb);
-    }
-}
-
-static void dready(struct sock* sk)
-{
-    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
-    if (likely(tun)) {
-        queue_work(tun->wq, &tun->rx_work);
     }
 }
 
@@ -257,6 +267,12 @@ static int dstop(struct net_device* dev)
     }
     spin_unlock_irqrestore(&tun->tx_lock, flags);
 
+    spin_lock_irqsave(&tun->rx_lock, flags);
+    while (kfifo_get(&tun->rx_fifo, &skb)) {
+        dev_kfree_skb_any(skb);
+    }
+    spin_unlock_irqrestore(&tun->rx_lock, flags);
+
     pr_info("tnet: device stopped\n");
     return 0;
 }
@@ -265,6 +281,11 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_struct* tun = netdev_priv(dev);
     unsigned long flags;
+
+    if (unlikely(!tun)) {
+        dev_kfree_skb_any(skb);
+        return NETDEV_TX_OK;
+    }
 
     spin_lock_irqsave(&tun->tx_lock, flags);
     if (unlikely(kfifo_is_full(&tun->tx_fifo))) {
@@ -281,6 +302,41 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
     queue_work(tun->wq, &tun->tx_work);
 
     return NETDEV_TX_OK;
+}
+
+
+static int tenrecv(struct sock* sk, struct sk_buff* skb)
+{
+    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
+    unsigned long flags;
+
+    if (unlikely(!tun)) {
+        dev_kfree_skb_any(skb);
+        return 0;
+    }
+
+    struct net_device* dev = tun->dev;
+
+    if (unlikely(!dev)) {
+        dev_kfree_skb_any(skb);
+        return 0;
+    }
+
+    spin_lock_irqsave(&tun->rx_lock, flags);
+    if (unlikely(kfifo_is_full(&tun->rx_fifo))) {
+        spin_unlock_irqrestore(&tun->rx_lock, flags);
+        dev->stats.rx_dropped++;
+        dev_kfree_skb_any(skb);
+        return 0;
+    }
+
+    kfifo_put(&tun->rx_fifo, skb);
+
+    spin_unlock_irqrestore(&tun->rx_lock, flags);
+
+    queue_work(tun->wq, &tun->rx_work);
+
+    return 0;
 }
 
 static const struct net_device_ops ops = {
@@ -302,6 +358,7 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_GSO;
     dev->features &= ~NETIF_F_GRO;
     dev->mtu = MTU;
+    dev->needed_headroom = sizeof(struct iphdr) + sizeof(struct udphdr);
 
     eth_hw_addr_random(dev);
 }
@@ -340,6 +397,8 @@ static int __init minit(void)
 
     spin_lock_init(&tun->tx_lock);
     INIT_KFIFO(tun->tx_fifo);
+    spin_lock_init(&tun->rx_lock);
+    INIT_KFIFO(tun->rx_fifo);
     INIT_WORK(&tun->tx_work, tx);
     INIT_WORK(&tun->rx_work, rx);
 
@@ -363,11 +422,17 @@ static int __init minit(void)
         goto err_ips;
     }
 
+    err = kfifo_alloc(&tun->rx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    if (err) {
+        pr_err("tnet: failed to allocate rx fifo: %d\n", err);
+        goto err_txfifo;
+    }
+
     tun->wq = alloc_workqueue("tnet", WQ_UNBOUND, 0);
     if (!tun->wq) {
         pr_err("tnet: failed to allocate workqueue\n");
         err = -ENOMEM;
-        goto err_fifo;
+        goto err_rxfifo;
     }
 
     err = register_netdev(tdev);
@@ -377,18 +442,21 @@ static int __init minit(void)
     }
 
     struct sock* sk = tun->sock->sk;
-    write_lock_bh(&sk->sk_callback_lock);
-    tun->orig_data_ready = sk->sk_data_ready;
-    sk->sk_data_ready = dready;
+    lock_sock(sk);
     sk->sk_user_data = tun;
-    write_unlock_bh(&sk->sk_callback_lock);
+    udp_encap_enable();
+    udp_sk(sk)->encap_rcv = tenrecv;
+    udp_sk(sk)->encap_type = 1;
+    release_sock(sk);
 
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
 
 err_wq:
     destroy_workqueue(tun->wq);
-err_fifo:
+err_rxfifo:
+    kfifo_free(&tun->rx_fifo);
+err_txfifo:
     kfifo_free(&tun->tx_fifo);
 err_ips:
     ips_close(tun->ips);
@@ -409,10 +477,12 @@ static void __exit mexit(void)
 
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
-        write_lock_bh(&sk->sk_callback_lock);
-        sk->sk_data_ready = tun->orig_data_ready;
-        sk->sk_user_data = NULL;
-        write_unlock_bh(&sk->sk_callback_lock);
+        lock_sock(sk);
+        WRITE_ONCE(udp_sk(sk)->encap_rcv, NULL);
+        WRITE_ONCE(sk->sk_user_data, NULL);
+        release_sock(sk);
+        udp_encap_disable();
+        synchronize_net();
     }
 
     unregister_netdev(tdev);
@@ -430,7 +500,12 @@ static void __exit mexit(void)
         dev_kfree_skb_any(skb);
     }
 
+    while (kfifo_get(&tun->rx_fifo, &skb)) {
+        dev_kfree_skb_any(skb);
+    }
+
     kfifo_free(&tun->tx_fifo);
+    kfifo_free(&tun->rx_fifo);
 
     if (tun->ips) {
         ips_close(tun->ips);

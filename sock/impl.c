@@ -5,16 +5,22 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <linux/net.h>
+#include <linux/compiler.h>
+#include <linux/err.h>
 #include <linux/in.h>
-#include <linux/inet.h>
-#include <linux/sockptr.h>
-#include <net/sock.h>
+#include <linux/ip.h>
+#include <linux/net.h>
+#include <linux/netdevice.h>
+#include <linux/udp.h>
+#include <net/dst.h>
+#include <net/flow.h>
+#include <net/inet_sock.h>
 #include <net/net_namespace.h>
+#include <net/route.h>
+#include <net/sock.h>
+#include <net/udp_tunnel.h>
 
 #include "impl.h"
-
-#define SOCKET_BUFFER_SIZE (4 * 1024 * 1024)
 
 struct socket* sock_init(__be16 port)
 {
@@ -37,20 +43,6 @@ struct socket* sock_init(__be16 port)
         return ERR_PTR(err);
     }
 
-    int buffer_size = SOCKET_BUFFER_SIZE;
-
-    err = sock_setsockopt(sock, SOL_SOCKET, SO_RCVBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
-    if (unlikely(err)) {
-        sock_release(sock);
-        return ERR_PTR(err);
-    }
-
-    err = sock_setsockopt(sock, SOL_SOCKET, SO_SNDBUFFORCE, KERNEL_SOCKPTR(&buffer_size), sizeof(buffer_size));
-    if (unlikely(err)) {
-        sock_release(sock);
-        return ERR_PTR(err);
-    }
-
     return sock;
 }
 
@@ -63,64 +55,34 @@ void sock_close(struct socket* sock)
     sock_release(sock);
 }
 
-int sock_write(struct socket *sock, u8* data, size_t len, __be32 ip, __be16 port)
+int sock_send(struct socket* sock, struct sk_buff* skb, __be32 dip, __be16 dport)
 {
-    if (unlikely(!sock || !data)) {
+    if (unlikely(!sock || !skb || !dip)) {
         return -EINVAL;
     }
 
-    struct kvec kv;
-
-    kv.iov_base = data;
-    kv.iov_len = len;
-
-    struct sockaddr_in dest_addr = {
-        .sin_family = AF_INET,
-        .sin_port = port,
-        .sin_addr = { .s_addr = ip }
-    };
-    
-    struct msghdr msg = {
-        .msg_name = &dest_addr,
-        .msg_namelen = sizeof(dest_addr)
+    struct sock* sk = sock->sk;
+    struct flowi4 fl = {
+        .flowi4_proto = IPPROTO_UDP,
+        .daddr = dip,
+        .fl4_sport = inet_sk(sk)->inet_sport,
+        .fl4_dport = dport,
     };
 
-    int ret = kernel_sendmsg(sock, &msg, &kv, 1, len);
-
-    if (unlikely((size_t)ret < len)) {
-        return -EIO;
+    struct rtable* rt = ip_route_output_flow(sock_net(sk), &fl, sk);
+    if (unlikely(IS_ERR(rt))) {
+        return PTR_ERR(rt);
     }
 
-    return ret;
-}
-
-int sock_read(struct socket *sock, u8* data, size_t len, __be32* ip, __be16* port)
-{
-    if (unlikely(!sock || !data || !ip || !port)) {
-        return -EINVAL;
+    int err = skb_cow_head(skb,
+        LL_RESERVED_SPACE(rt->dst.dev) + rt->dst.header_len + sizeof(struct iphdr) + sizeof(struct udphdr));
+    if (unlikely(err)) {
+        ip_rt_put(rt);
+        return err;
     }
 
-    struct kvec kv;
+    udp_tunnel_xmit_skb(rt, sk, skb, fl.saddr, fl.daddr, 0,
+        ip4_dst_hoplimit(&rt->dst), 0, fl.fl4_sport, fl.fl4_dport, false, true);
 
-    kv.iov_base = data;
-    kv.iov_len = len;
-
-    struct sockaddr_in src_addr = {0};
-    struct msghdr msg = {
-        .msg_name = &src_addr,
-        .msg_namelen = sizeof(src_addr)
-    };
-
-    int ret = kernel_recvmsg(sock, &msg, &kv, 1, len, MSG_DONTWAIT);
-
-    if (likely(ret > 0)) {
-        *ip = src_addr.sin_addr.s_addr;
-        *port = src_addr.sin_port;
-    }
-
-    if (unlikely(ret == -EAGAIN || ret == -EWOULDBLOCK)) {
-        return 0;
-    }
-
-    return ret;
+    return 0;
 }
