@@ -35,7 +35,7 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
-#define SEND_FIFO_SIZE 4096
+#define FIFO_SIZE 4096
 
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
@@ -60,12 +60,6 @@ static void tx(struct work_struct* work)
         struct net_device* dev = tun->dev;
 
         if (unlikely(!netif_running(dev))) {
-            break;
-        }
-
-        struct socket* sock = READ_ONCE(tun->sock);
-
-        if (unlikely(!sock)) {
             break;
         }
 
@@ -136,12 +130,21 @@ static void tx(struct work_struct* work)
             continue;
         }
 
+        struct socket* sock = READ_ONCE(tun->sock);
+
+        if (unlikely(!sock)) {
+            dev_kfree_skb_any(skb);
+            break;
+        }
+
+        u32 len = skb->len;
+
         if (unlikely(sock_send(sock, skb, dip, dport))) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
         } else {
             dev->stats.tx_packets++;
-            dev->stats.tx_bytes += skb->len;
+            dev->stats.tx_bytes += len;
         }
     }
 }
@@ -154,14 +157,7 @@ static void rx(struct work_struct* work)
     unsigned long flags;
 
     while (true) {
-
         if (unlikely(!netif_running(dev))) {
-            break;
-        }
-
-        struct socket* sock = READ_ONCE(tun->sock);
-
-        if (unlikely(!sock)) {
             break;
         }
 
@@ -172,13 +168,13 @@ static void rx(struct work_struct* work)
         }
         spin_unlock_irqrestore(&tun->rx_lock, flags);
 
-        if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
+        if (unlikely(skb_linearize(skb))) {
             dev->stats.rx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
-        if (unlikely(skb_linearize(skb))) {
+        if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
             dev->stats.rx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
@@ -211,7 +207,7 @@ static void rx(struct work_struct* work)
         if (unlikely(!ips)) {
             dev->stats.rx_errors++;
             dev_kfree_skb_any(skb);
-            continue;
+            break;
         }
 
         ips_add(ips, sip, tip, tport);
@@ -282,11 +278,6 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
     struct tun_struct* tun = netdev_priv(dev);
     unsigned long flags;
 
-    if (unlikely(!tun)) {
-        dev_kfree_skb_any(skb);
-        return NETDEV_TX_OK;
-    }
-
     spin_lock_irqsave(&tun->tx_lock, flags);
     if (unlikely(kfifo_is_full(&tun->tx_fifo))) {
         spin_unlock_irqrestore(&tun->tx_lock, flags);
@@ -316,11 +307,6 @@ static int tenrecv(struct sock* sk, struct sk_buff* skb)
     }
 
     struct net_device* dev = tun->dev;
-
-    if (unlikely(!dev)) {
-        dev_kfree_skb_any(skb);
-        return 0;
-    }
 
     spin_lock_irqsave(&tun->rx_lock, flags);
     if (unlikely(kfifo_is_full(&tun->rx_fifo))) {
@@ -416,13 +402,13 @@ static int __init minit(void)
         goto err_sock;
     }
 
-    err = kfifo_alloc(&tun->tx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    err = kfifo_alloc(&tun->tx_fifo, FIFO_SIZE, GFP_KERNEL);
     if (err) {
         pr_err("tnet: failed to allocate tx fifo: %d\n", err);
         goto err_ips;
     }
 
-    err = kfifo_alloc(&tun->rx_fifo, SEND_FIFO_SIZE, GFP_KERNEL);
+    err = kfifo_alloc(&tun->rx_fifo, FIFO_SIZE, GFP_KERNEL);
     if (err) {
         pr_err("tnet: failed to allocate rx fifo: %d\n", err);
         goto err_txfifo;

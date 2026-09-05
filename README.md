@@ -8,7 +8,7 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 ┌─────────────┐     ┌─────────────┐
 │   Client    │     │   Server    │
 │             │     │             │
-│  tnet0      │────►│  tnet0      │
+│  tnet0      │◄───►│  tnet0      │
 │  10.0.3.2   │ UDP │  10.0.3.1   │
 │             │     │  NAT/MASQ   │
 └─────────────┘     └─────────────┘
@@ -21,7 +21,7 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 
 ```
 tx: skb → strip eth header → validate IPv4 → encrypt → UDP send
-rx: UDP recv → decrypt → validate IPv4 → add eth header → netif_rx
+rx: UDP recv → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
 ```
 
 Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
@@ -57,6 +57,9 @@ Requires kernel headers installed (`/lib/modules/$(uname -r)/build`).
 Build as user, `sudo` only for the copy step (avoids root-owned build artifacts):
 
 ```bash
+# client
+make client && sudo make install_module && sudo make install_client
+# server
 make server && sudo make install_module && sudo make install_server
 ```
 
@@ -82,9 +85,9 @@ sudo tun d   # disconnect
 ### Server
 
 ```bash
-tun c   # connect
-tun d   # disconnect
-tun r   # restart tunnel (reload module)
+sudo tun c   # connect
+sudo tun d   # disconnect
+sudo tun r   # restart tunnel (reload module)
 ```
 
 ### systemd (server)
@@ -106,9 +109,9 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, tx/rx works on a dedicated workqueue
+main.c          Module init/exit, netdevice ops, encap_rcv, tx/rx works on a dedicated workqueue
 types.h         tun_struct definition
-sock/impl.c     Kernel UDP socket (bind, sendmsg, recvmsg)
+sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
 crypt/impl.c    Encrypt/decrypt (substitution cipher)
 crypt/impl.h
@@ -122,14 +125,13 @@ utils/impl.h
 
 ## Configuration
 
-| Constant           | Value           | Description                |
-|--------------------|-----------------|----------------------------|
-| `MAX_BUFFER_SIZE`  | 1472            | Max payload buffer (bytes) |
-| `SEND_FIFO_SIZE`   | 4096            | TX fifo depth (sk_buffs)   |
-| `SOCKET_BUFFER_SIZE` | 4194304       | Socket recv/send buffer    |
-| `IPS_HASH_BITS`    | 10              | IPS hashtable size (1024)  |
-| `IPS_CHECK_DELAY`  | 600s            | IPS expiry check interval  |
-| `IPS_REMOVE_DELAY` | 3600s           | IPS entry lifetime         |
+| Constant               | Value           | Description                   |
+|------------------------|-----------------|-------------------------------|
+| `MTU`                  | 1472            | Device MTU (bytes)            |
+| `FIFO_SIZE`            | 4096            | TX/RX fifo depth (sk_buffs)   |
+| `IPS_HASH_BITS`        | 10              | IPS hashtable size (1024)     |
+| `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
+| `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |
 
 ## WIP
 
