@@ -10,6 +10,7 @@
 
 #include <linux/skbuff.h>
 #include <linux/types.h>
+#include <net/dst_cache.h>
 #include <net/udp_tunnel.h>
 
 struct socket* sock_init(__be16 port);
@@ -18,6 +19,7 @@ void sock_setup(struct socket* sock, struct udp_tunnel_sock_cfg* cfg);
 
 void sock_close(struct socket* sock);
 
-int sock_send(struct socket* sock, struct sk_buff* skb, __be32 dip, __be16 dport);
+int sock_send(struct socket* sock, struct sk_buff* skb,
+              struct dst_cache* dc, __be32 dip, __be16 dport);
 
 #endif

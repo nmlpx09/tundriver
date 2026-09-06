@@ -88,9 +88,8 @@ static void tx(struct work_struct* work)
             continue;
         }
 
-    #ifdef SERVER
         rcu_read_lock();
-
+    #ifdef SERVER
         struct ips_storage* ips = READ_ONCE(tun->ips);
 
         if (unlikely(!ips)) {
@@ -111,15 +110,17 @@ static void tx(struct work_struct* work)
 
         __be32 dip = READ_ONCE(entry->ip);
         __be16 dport = READ_ONCE(entry->port);
-        rcu_read_unlock();
+        struct dst_cache* dc = &entry->dst_cache;
     #else
         __be32 dip = tun->dip;
         __be16 dport = tun->dport;
+        struct dst_cache* dc = &tun->dst_cache;
     #endif
 
         if (unlikely(encrypt(skb->data, skb->len))) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
+            rcu_read_unlock();
             continue;
         }
 
@@ -127,18 +128,20 @@ static void tx(struct work_struct* work)
 
         if (unlikely(!sock)) {
             dev_kfree_skb_any(skb);
+            rcu_read_unlock();
             break;
         }
 
         u32 len = skb->len;
 
-        if (unlikely(sock_send(sock, skb, dip, dport))) {
+        if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
             dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
         } else {
             dev->stats.tx_packets++;
             dev->stats.tx_bytes += len;
         }
+        rcu_read_unlock();
     }
 }
 
@@ -315,7 +318,7 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_GSO;
     dev->features &= ~NETIF_F_GRO;
     dev->mtu = MTU;
-    dev->needed_headroom = LL_RESERVED_SPACE(dev) + sizeof(struct iphdr) + sizeof(struct udphdr);
+    dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
 
     eth_hw_addr_random(dev);
 }
@@ -392,6 +395,12 @@ static int __init minit(void)
         goto err_rxfifo;
     }
 
+    err = dst_cache_init(&tun->dst_cache, GFP_KERNEL);
+    if (err) {
+        pr_err("tnet: dst_cache init failed: %d\n", err);
+        goto err_wq;
+    }
+
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
@@ -411,6 +420,7 @@ static int __init minit(void)
 
 err_wq:
     destroy_workqueue(tun->wq);
+    dst_cache_destroy(&tun->dst_cache);
 err_rxfifo:
     kfifo_free(&tun->rx_fifo);
 err_txfifo:
@@ -462,6 +472,8 @@ static void __exit mexit(void)
 
     kfifo_free(&tun->tx_fifo);
     kfifo_free(&tun->rx_fifo);
+
+    dst_cache_destroy(&tun->dst_cache);
 
     if (tun->ips) {
         ips_close(tun->ips);

@@ -14,6 +14,7 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
+#include <net/dst_cache.h>
 
 #include <ips/types.h>
 
@@ -33,6 +34,8 @@ struct tun_struct {
     struct work_struct rx_work;
 
     struct ips_storage* ips;
+
+    struct dst_cache dst_cache;
 
     __be32 dip;
     __be16 dport;

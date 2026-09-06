@@ -54,34 +54,46 @@ void sock_close(struct socket* sock)
     udp_tunnel_sock_release(sock);
 }
 
-int sock_send(struct socket* sock, struct sk_buff* skb, __be32 dip, __be16 dport)
+int sock_send(struct socket* sock, struct sk_buff* skb,
+              struct dst_cache* dc, __be32 dip, __be16 dport)
 {
     if (unlikely(!sock || !skb || !dip)) {
         return -EINVAL;
     }
 
     struct sock* sk = sock->sk;
-    struct flowi4 fl = {
-        .flowi4_proto = IPPROTO_UDP,
-        .daddr = dip,
-        .fl4_sport = inet_sk(sk)->inet_sport,
-        .fl4_dport = dport,
-    };
-
-    struct rtable* rt = ip_route_output_flow(sock_net(sk), &fl, sk);
-    if (unlikely(IS_ERR(rt))) {
-        return PTR_ERR(rt);
-    }
+    struct rtable* rt;
+    __be32 saddr;
 
     int err = skb_cow_head(skb,
-        LL_RESERVED_SPACE(rt->dst.dev) + rt->dst.header_len + sizeof(struct iphdr) + sizeof(struct udphdr));
+        ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr));
     if (unlikely(err)) {
-        ip_rt_put(rt);
         return err;
     }
 
-    udp_tunnel_xmit_skb(rt, sk, skb, fl.saddr, fl.daddr, 0,
-        ip4_dst_hoplimit(&rt->dst), 0, fl.fl4_sport, fl.fl4_dport, false, true);
+    local_bh_disable();
+    rt = dst_cache_get_ip4(dc, &saddr);
+    if (unlikely(!rt)) {
+        struct flowi4 fl = {
+            .flowi4_proto = IPPROTO_UDP,
+            .daddr = dip,
+            .fl4_sport = inet_sk(sk)->inet_sport,
+            .fl4_dport = dport,
+        };
+
+        rt = ip_route_output_flow(sock_net(sk), &fl, sk);
+        if (unlikely(IS_ERR(rt))) {
+            local_bh_enable();
+            return PTR_ERR(rt);
+        }
+
+        saddr = fl.saddr;
+        dst_cache_set_ip4(dc, &rt->dst, saddr);
+    }
+    local_bh_enable();
+
+    udp_tunnel_xmit_skb(rt, sk, skb, saddr, dip, 0,
+        ip4_dst_hoplimit(&rt->dst), 0, inet_sk(sk)->inet_sport, dport, false, true);
 
     return 0;
 }

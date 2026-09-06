@@ -11,6 +11,7 @@
 #include <linux/hashtable.h>
 #include <linux/rcupdate.h>
 #include <linux/types.h>
+#include <net/dst_cache.h>
 
 struct ips_entry {
     __be32 key;
@@ -19,6 +20,7 @@ struct ips_entry {
     u64 ts;
     struct hlist_node node;
     struct rcu_head rhf;
+    struct dst_cache dst_cache;
 };
 
 #define IPS_HASH_BITS 10

@@ -20,6 +20,13 @@
 
 #include "impl.h"
 
+static void ips_entry_free_rcu(struct rcu_head* rhf)
+{
+    struct ips_entry* entry = container_of(rhf, struct ips_entry, rhf);
+    dst_cache_destroy(&entry->dst_cache);
+    kfree(entry);
+}
+
 struct ips_storage* ips_init(void)
 {
     struct ips_storage* storage = kmalloc(sizeof(struct ips_storage), GFP_KERNEL);
@@ -46,7 +53,7 @@ void ips_close(struct ips_storage* storage)
 
     hash_for_each_safe(storage->table, i, tmp, entry, node) {
         hash_del_rcu(&entry->node);
-        kfree_rcu(entry, rhf);
+        call_rcu(&entry->rhf, ips_entry_free_rcu);
     }
 
     synchronize_rcu();
@@ -93,7 +100,7 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         hash_for_each_safe(storage->table, i, tmp, entry, node) {
             if (unlikely(now - entry->ts > IPS_REMOVE_DELAY_NS)) {
                 hash_del_rcu(&entry->node);
-                kfree_rcu(entry, rhf);
+                call_rcu(&entry->rhf, ips_entry_free_rcu);
             }
         }
     }
@@ -101,15 +108,24 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
     entry = ips_get(storage, key);
 
     if (likely(entry)) {
-        WRITE_ONCE(entry->ip, ip);
-        WRITE_ONCE(entry->port, port);
+        if (unlikely(entry->ip != ip || entry->port != port)) {
+            WRITE_ONCE(entry->ip, ip);
+            WRITE_ONCE(entry->port, port);
+            dst_cache_reset(&entry->dst_cache);
+        }
         WRITE_ONCE(entry->ts, now);
         return 0;
     }
 
-    entry = kmalloc(sizeof(struct ips_entry), GFP_ATOMIC);
+    entry = kmalloc(sizeof(struct ips_entry), GFP_KERNEL);
     if (!entry) {
         return -ENOMEM;
+    }
+
+    int err = dst_cache_init(&entry->dst_cache, GFP_KERNEL);
+    if (err) {
+        kfree(entry);
+        return err;
     }
 
     entry->key = key;
