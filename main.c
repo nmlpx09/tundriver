@@ -68,13 +68,13 @@ static void tx(struct work_struct* work)
         spin_unlock_bh(&tun->tx_lock);
 
         if (unlikely(skb_linearize(skb))) {
-            dev->stats.tx_errors++;
+            dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
 
         if (unlikely(!skb_pull(skb, ETH_HLEN))) {
-            dev->stats.tx_errors++;
+            dev->stats.tx_dropped++;
             dev_kfree_skb_any(skb);
             continue;
         }
