@@ -9,10 +9,12 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/hashtable.h>
+#include <linux/kernel.h>
 #include <linux/ktime.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/types.h>
+#include <net/dst_cache.h>
 
 #define IPS_CHECK_DELAY_NS (600ull * NSEC_PER_SEC)
 #define IPS_REMOVE_DELAY_NS (3600ull * NSEC_PER_SEC)

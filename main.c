@@ -23,8 +23,11 @@
 #include <linux/string.h>
 #include <linux/udp.h>
 #include <linux/workqueue.h>
+#include <net/dst_cache.h>
+#include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/udp.h>
+#include <net/udp_tunnel.h>
 
 #include <crypt/impl.h>
 #include <ips/impl.h>
