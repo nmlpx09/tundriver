@@ -23,7 +23,7 @@ struct ips_entry {
     struct dst_cache dst_cache;
 };
 
-#define IPS_HASH_BITS 10
+#define IPS_HASH_BITS 8
 
 struct ips_storage {
     DECLARE_HASHTABLE(table, IPS_HASH_BITS);

@@ -9,7 +9,6 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/hashtable.h>
-#include <linux/jhash.h>
 #include <linux/ktime.h>
 #include <linux/rcupdate.h>
 #include <linux/slab.h>
@@ -60,11 +59,6 @@ void ips_close(struct ips_storage* storage)
     kfree(storage);
 }
 
-static u32 ips_hash(__be32 key)
-{
-    return jhash_1word((__force u32)key, 0);
-}
-
 struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
 {
     if (unlikely(!storage)) {
@@ -72,9 +66,8 @@ struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
     }
 
     struct ips_entry* entry;
-    u32 h = ips_hash(key);
 
-    hash_for_each_possible(storage->table, entry, node, h) {
+    hash_for_each_possible(storage->table, entry, node, (__force u32)key) {
         if (entry->key == key) {
             return entry;
         }
@@ -132,8 +125,7 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
     entry->ip = ip;
     entry->port = port;
     entry->ts = now;
-    u32 h = ips_hash(key);
-    hash_add_rcu(storage->table, &entry->node, h);
+    hash_add_rcu(storage->table, &entry->node, (__force u32)key);
 
     return 0;
 }

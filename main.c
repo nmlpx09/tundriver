@@ -127,6 +127,7 @@ static void tx(struct work_struct* work)
         struct socket* sock = READ_ONCE(tun->sock);
 
         if (unlikely(!sock)) {
+            dev->stats.tx_errors++;
             dev_kfree_skb_any(skb);
             rcu_read_unlock();
             break;
