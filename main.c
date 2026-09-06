@@ -52,11 +52,10 @@ static struct net_device* tdev;
 static void tx(struct work_struct* work)
 {
     struct tun_struct* tun = container_of(work, struct tun_struct, tx_work);
+    struct net_device* dev = tun->dev;
     struct sk_buff* skb = NULL;
 
     while (true) {
-        struct net_device* dev = tun->dev;
-
         if (unlikely(!netif_running(dev))) {
             break;
         }
@@ -212,6 +211,11 @@ static void rx(struct work_struct* work)
         }
 
         skb_dst_drop(skb);
+        skb_orphan(skb);
+        skb_clear_hash(skb);
+        skb->mark = 0;
+        skb->priority = 0;
+        skb->encapsulation = 0;
 
         struct ethhdr* eth = skb_push(skb, ETH_HLEN);
         memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
