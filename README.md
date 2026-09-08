@@ -24,7 +24,7 @@ tx: skb → strip eth header → validate IPv4 → encrypt → UDP send
 rx: UDP recv → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
 ```
 
-Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
+Encryption is an XOR stream cipher (64-bit repeating mask). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
 Both directions are processed asynchronously by tx/rx work items on a dedicated unbound workqueue.
 
@@ -113,9 +113,8 @@ main.c          Module init/exit, netdevice ops, encap_rcv, tx/rx works on a ded
 types.h         tun_struct definition
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
-crypt/impl.c    Encrypt/decrypt (substitution cipher)
+crypt/impl.c    Encrypt/decrypt (XOR stream cipher)
 crypt/impl.h
-crypt/table.h   256-byte encrypt/decrypt lookup tables
 ips/impl.c      IPS table (RCU hashtable, add/get/expire)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
@@ -127,13 +126,13 @@ ips/types.h     ips_entry, ips_storage types
 |------------------------|-----------------|-------------------------------|
 | `MTU`                  | 1472            | Device MTU (bytes)            |
 | `FIFO_SIZE`            | 4096            | TX/RX fifo depth (sk_buffs)   |
-| `IPS_HASH_BITS`        | 10              | IPS hashtable size (1024)     |
+| `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
 | `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
 | `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |
 
 ## WIP
 
-- AES-128-GCM encryption (replace substitution cipher)
+- AES-128-GCM encryption (replace XOR stream cipher)
 
 ## License
 

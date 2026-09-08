@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * tnet - encrypt/decrypt (substitution cipher)
+ * tnet - encrypt/decrypt (XOR stream cipher, unaligned + endian-safe)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
