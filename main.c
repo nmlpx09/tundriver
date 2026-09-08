@@ -364,9 +364,7 @@ static int __init minit(void)
     tun->dport = htons(dest_port);
 
     spin_lock_init(&tun->tx_lock);
-    INIT_KFIFO(tun->tx_fifo);
     spin_lock_init(&tun->rx_lock);
-    INIT_KFIFO(tun->rx_fifo);
     INIT_WORK(&tun->tx_work, tx);
     INIT_WORK(&tun->rx_work, rx);
 
@@ -396,7 +394,7 @@ static int __init minit(void)
         goto err_txfifo;
     }
 
-    tun->wq = alloc_workqueue("tnet", WQ_UNBOUND, 0);
+    tun->wq = alloc_workqueue("tnet", WQ_UNBOUND | WQ_HIGHPRI, 0);
     if (!tun->wq) {
         pr_err("tnet: failed to allocate workqueue\n");
         err = -ENOMEM;
@@ -412,7 +410,7 @@ static int __init minit(void)
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
-        goto err_wq;
+        goto err_cache;
     }
 
     struct udp_tunnel_sock_cfg sock_cfg = {
@@ -426,9 +424,10 @@ static int __init minit(void)
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
 
+err_cache:
+    dst_cache_destroy(&tun->dst_cache);
 err_wq:
     destroy_workqueue(tun->wq);
-    dst_cache_destroy(&tun->dst_cache);
 err_rxfifo:
     kfifo_free(&tun->rx_fifo);
 err_txfifo:

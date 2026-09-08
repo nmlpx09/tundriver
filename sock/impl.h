@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * tnet - kernel UDP socket (bind, sendmsg, recvmsg)
+ * tnet - kernel UDP socket (udp_sock_create4, setup_udp_tunnel_sock, udp_tunnel_xmit_skb)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
