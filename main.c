@@ -33,7 +33,7 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
-#define RX_Q_LIMIT 1024
+#define RX_Q_LIMIT 4096
 
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
@@ -51,11 +51,6 @@ static struct net_device* tdev;
 static int tx(struct tun_struct* tun, struct sk_buff* skb)
 {
     struct net_device* dev = tun->dev;
-
-    if (unlikely(skb_linearize(skb))) {
-        dev->stats.tx_dropped++;
-        return -1;
-    }
 
     if (unlikely(!skb_pull(skb, ETH_HLEN))) {
         dev->stats.tx_dropped++;
@@ -282,6 +277,7 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
+    dev->features &= ~NETIF_F_SG;
     dev->features &= ~NETIF_F_IP_CSUM;
     dev->features &= ~NETIF_F_IPV6_CSUM;
     dev->features &= ~NETIF_F_TSO;
@@ -367,6 +363,9 @@ static int __init minit(void)
     return 0;
 
 err_cache:
+    napi_disable(&tun->napi);
+    skb_queue_purge(&tun->rx_queue);
+    netif_napi_del(&tun->napi);
     dst_cache_destroy(&tun->dst_cache);
 err_ips:
     ips_close(tun->ips);
