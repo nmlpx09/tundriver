@@ -10,9 +10,7 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <linux/net.h>
-#include <linux/netdevice.h>
 #include <linux/udp.h>
-#include <net/dst.h>
 #include <net/dst_cache.h>
 #include <net/flow.h>
 #include <net/inet_sock.h>

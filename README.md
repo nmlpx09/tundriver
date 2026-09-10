@@ -26,7 +26,7 @@ rx: UDP recv → strip UDP header → decrypt → validate IPv4 → add eth head
 
 Encryption is an XOR stream cipher (64-bit repeating mask). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
-Both directions are processed asynchronously by tx/rx work items on a dedicated unbound workqueue.
+Both directions are processed synchronously: TX runs in the `ndo_start_xmit` path, RX runs in the UDP `encap_rcv` callback.
 
 ## Build & Install
 
@@ -109,7 +109,7 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, encap_rcv, tx/rx works on a dedicated workqueue
+main.c          Module init/exit, netdevice ops, encap_rcv, tx/rx paths
 types.h         tun_struct definition
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
@@ -125,7 +125,6 @@ ips/types.h     ips_entry, ips_storage types
 | Constant               | Value           | Description                   |
 |------------------------|-----------------|-------------------------------|
 | `MTU`                  | 1472            | Device MTU (bytes)            |
-| `FIFO_SIZE`            | 4096            | TX/RX fifo depth (sk_buffs)   |
 | `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
 | `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
 | `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |
