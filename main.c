@@ -33,6 +33,7 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
+#define RX_Q_LIMIT 1024
 
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
@@ -50,10 +51,6 @@ static struct net_device* tdev;
 static int tx(struct tun_struct* tun, struct sk_buff* skb)
 {
     struct net_device* dev = tun->dev;
-
-    if (unlikely(!netif_running(dev))) {
-        return -1;
-    }
 
     if (unlikely(skb_linearize(skb))) {
         dev->stats.tx_dropped++;
@@ -133,10 +130,6 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
 {
     struct net_device* dev = tun->dev;
 
-    if (unlikely(!netif_running(dev))) {
-        return -1;
-    }
-
     if (unlikely(skb_linearize(skb))) {
         dev->stats.rx_dropped++;
         return -1;
@@ -197,7 +190,53 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
     dev->stats.rx_packets++;
     dev->stats.rx_bytes += skb->len;
 
-    netif_rx(skb);
+    napi_gro_receive(&tun->napi, skb);
+
+    return 0;
+}
+
+static int npoll(struct napi_struct* napi, int budget)
+{
+    struct tun_struct* tun = container_of(napi, struct tun_struct, napi);
+    int work = 0;
+
+    while (work < budget && netif_running(tun->dev)) {
+        struct sk_buff* skb = skb_dequeue(&tun->rx_queue);
+        if (unlikely(!skb)) {
+            break;
+        }
+
+        if (unlikely(rx(tun, skb))) {
+            dev_kfree_skb_any(skb);
+        }
+
+        work++;
+    }
+
+    if (unlikely(work < budget)) {
+        napi_complete_done(napi, work);
+    }
+
+    return work;
+}
+
+static int tenrecv(struct sock* sk, struct sk_buff* skb)
+{
+    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
+
+    if (unlikely(!tun || !netif_running(tun->dev))) {
+        dev_kfree_skb_any(skb);
+        return 0;
+    }
+
+    if (unlikely(skb_queue_len(&tun->rx_queue) >= RX_Q_LIMIT)) {
+        tun->dev->stats.rx_dropped++;
+        dev_kfree_skb_any(skb);
+        return 0;
+    }
+
+    skb_queue_tail(&tun->rx_queue, skb);
+    napi_schedule(&tun->napi);
 
     return 0;
 }
@@ -228,17 +267,6 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
     }
 
     return NETDEV_TX_OK;
-}
-
-static int tenrecv(struct sock* sk, struct sk_buff* skb)
-{
-    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
-
-    if (unlikely(!tun || rx(tun, skb))) {
-        dev_kfree_skb_any(skb);
-    }
-
-    return 0;
 }
 
 static const struct net_device_ops ops = {
@@ -317,11 +345,9 @@ static int __init minit(void)
         goto err_ips;
     }
 
-    err = register_netdev(tdev);
-    if (err) {
-        pr_err("tnet: failed to register net device: %d\n", err);
-        goto err_cache;
-    }
+    skb_queue_head_init(&tun->rx_queue);
+    netif_napi_add(tdev, &tun->napi, npoll);
+    napi_enable(&tun->napi);
 
     struct udp_tunnel_sock_cfg sock_cfg = {
         .sk_user_data = tun,
@@ -330,6 +356,12 @@ static int __init minit(void)
     };
 
     sock_setup(tun->sock, &sock_cfg);
+
+    err = register_netdev(tdev);
+    if (err) {
+        pr_err("tnet: failed to register net device: %d\n", err);
+        goto err_cache;
+    }
 
     pr_info("tnet: module loaded, device %s registered\n", tdev->name);
     return 0;
@@ -353,6 +385,8 @@ static void __exit mexit(void)
 
     struct tun_struct* tun = netdev_priv(tdev);
 
+    unregister_netdev(tdev);
+
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         lock_sock(sk);
@@ -361,8 +395,6 @@ static void __exit mexit(void)
         release_sock(sk);
         synchronize_net();
     }
-
-    unregister_netdev(tdev);
 
     dst_cache_destroy(&tun->dst_cache);
 
@@ -375,6 +407,10 @@ static void __exit mexit(void)
         sock_close(tun->sock);
         tun->sock = NULL;
     }
+
+    napi_disable(&tun->napi);
+    skb_queue_purge(&tun->rx_queue);
+    netif_napi_del(&tun->napi);
 
     free_netdev(tdev);
 

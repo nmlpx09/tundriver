@@ -21,12 +21,12 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 
 ```
 tx: skb → strip eth header → validate IPv4 → encrypt → UDP send
-rx: UDP recv → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
+rx: UDP recv (encap_rcv) → enqueue + NAPI schedule → poll: strip UDP header → decrypt → validate IPv4 → add eth header → napi_gro_receive
 ```
 
 Encryption is an XOR stream cipher (64-bit repeating mask). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
-Both directions are processed synchronously: TX runs in the `ndo_start_xmit` path, RX runs in the UDP `encap_rcv` callback.
+Both directions are processed synchronously: TX runs in the `ndo_start_xmit` path. RX is NAPI-based: the UDP `encap_rcv` callback enqueues skbs into a per-device RX queue and schedules NAPI; the poll routine drains the queue (bounded by `RX_Q_LIMIT` / NAPI budget), decrypts, and pushes up via `napi_gro_receive`.
 
 ## Build & Install
 
@@ -109,7 +109,7 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, encap_rcv, tx/rx paths
+main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, tx/rx paths
 types.h         tun_struct definition
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
@@ -125,6 +125,7 @@ ips/types.h     ips_entry, ips_storage types
 | Constant               | Value           | Description                   |
 |------------------------|-----------------|-------------------------------|
 | `MTU`                  | 1472            | Device MTU (bytes)            |
+| `RX_Q_LIMIT`           | 1024            | RX NAPI queue depth (sk_buffs)|
 | `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
 | `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
 | `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |

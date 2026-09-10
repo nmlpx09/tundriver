@@ -112,12 +112,12 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return 0;
     }
 
-    entry = kmalloc(sizeof(struct ips_entry), GFP_KERNEL);
+    entry = kmalloc(sizeof(struct ips_entry), GFP_ATOMIC);
     if (!entry) {
         return -ENOMEM;
     }
 
-    int err = dst_cache_init(&entry->dst_cache, GFP_KERNEL);
+    int err = dst_cache_init(&entry->dst_cache, GFP_ATOMIC);
     if (err) {
         kfree(entry);
         return err;
