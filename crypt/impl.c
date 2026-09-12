@@ -21,12 +21,12 @@ int encrypt(u8* buf, size_t bufl)
         return -EINVAL;
     }
 
-    const u64 mask_be = cpu_to_be64(MASK);
+    const u64 mask_be = MASK;
     const u8* mb = (const u8*)&mask_be;
 
     size_t i = 0;
     for (; i + 8 <= bufl; i += 8) {
-        put_unaligned_be64(get_unaligned_be64(buf + i) ^ mask_be, buf + i);
+        put_unaligned(get_unaligned(buf + i) ^ mask_be, buf + i);
     }
     for (; i < bufl; ++i) {
         buf[i] ^= mb[i % 8];

@@ -113,10 +113,9 @@ static int tx(struct tun_struct* tun, struct sk_buff* skb)
         return -1;
     }
 
-    dev->stats.tx_packets++;
-    dev->stats.tx_bytes += len;
-
     rcu_read_unlock();
+
+    dev_sw_netstats_tx_add(dev, 1, len);
 
     return 0;
 }
@@ -182,8 +181,7 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
     skb->protocol = eth_type_trans(skb, dev);
     skb->ip_summed = CHECKSUM_UNNECESSARY;
 
-    dev->stats.rx_packets++;
-    dev->stats.rx_bytes += skb->len;
+    dev_sw_netstats_rx_add(dev, skb->len);
 
     napi_gro_receive(&tun->napi, skb);
 
@@ -283,6 +281,7 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_TSO;
     dev->features &= ~NETIF_F_GSO;
     dev->features &= ~NETIF_F_GRO;
+    dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
 
