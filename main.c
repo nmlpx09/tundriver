@@ -281,7 +281,6 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_IPV6_CSUM;
     dev->features &= ~NETIF_F_TSO;
     dev->features &= ~NETIF_F_GSO;
-    dev->features &= ~NETIF_F_GRO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
