@@ -125,7 +125,7 @@ ips/types.h     ips_entry, ips_storage types
 | Constant               | Value           | Description                   |
 |------------------------|-----------------|-------------------------------|
 | `MTU`                  | 1472            | Device MTU (bytes)            |
-| `RX_Q_LIMIT`           | 1024            | RX NAPI queue depth (sk_buffs)|
+| `RX_Q_LIMIT`           | 4096            | RX NAPI queue depth (sk_buffs)|
 | `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
 | `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
 | `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |

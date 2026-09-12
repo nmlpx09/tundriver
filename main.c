@@ -276,9 +276,8 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
-    dev->features &= ~NETIF_F_SG;
     dev->features &= ~NETIF_F_IP_CSUM;
-    dev->features &= ~NETIF_F_IPV6_CSUM;
+    dev->features &= ~NETIF_F_SG;
     dev->features &= ~NETIF_F_TSO;
     dev->features &= ~NETIF_F_GSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
