@@ -64,6 +64,13 @@ static int tx(struct tun_struct* tun, struct sk_buff* skb)
         return -1;
     }
 
+    [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
+
+    if (unlikely(encrypt(skb->data, skb->len))) {
+        dev->stats.tx_errors++;
+        return -1;
+    }
+
     rcu_read_lock();
 #ifdef SERVER
     struct ips_storage* ips = READ_ONCE(tun->ips);
@@ -74,7 +81,7 @@ static int tx(struct tun_struct* tun, struct sk_buff* skb)
         return -1;
     }
 
-    struct ips_entry* entry = ips_get(ips, ip_hdr(skb)->daddr);
+    struct ips_entry* entry = ips_get(ips, daddr);
 
     if (unlikely(IS_ERR_OR_NULL(entry))) {
         dev->stats.tx_errors++;
@@ -86,16 +93,10 @@ static int tx(struct tun_struct* tun, struct sk_buff* skb)
     __be16 dport = READ_ONCE(entry->port);
     struct dst_cache* dc = &entry->dst_cache;
 #else
-    __be32 dip = tun->dip;
-    __be16 dport = tun->dport;
+    __be32 dip = READ_ONCE(tun->dip);
+    __be16 dport = READ_ONCE(tun->dport);
     struct dst_cache* dc = &tun->dst_cache;
 #endif
-
-    if (unlikely(encrypt(skb->data, skb->len))) {
-        dev->stats.tx_errors++;
-        rcu_read_unlock();
-        return -1;
-    }
 
     struct socket* sock = READ_ONCE(tun->sock);
 
