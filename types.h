@@ -9,8 +9,10 @@
 #define TYPES_H
 
 #include <linux/netdevice.h>
+#include <linux/ptr_ring.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
+#include <linux/workqueue.h>
 #include <net/dst_cache.h>
 
 #include <ips/types.h>
@@ -26,6 +28,14 @@ struct tun_struct {
 
     struct napi_struct napi;
     struct sk_buff_head rx_queue;
+
+    struct ptr_ring tx_ring;
+    struct workqueue_struct* tx_wq;
+    struct tx_worker {
+        void* ptr;
+        struct work_struct work;
+    } __percpu* tx_workers;
+    int last_cpu;
 
     __be32 dip;
     __be16 dport;
