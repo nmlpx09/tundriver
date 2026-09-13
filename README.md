@@ -20,13 +20,17 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 ### Data flow
 
 ```
-tx: skb → strip eth header → validate IPv4 → encrypt → UDP send
+tx: ndo_start_xmit → skb_orphan → ptr_ring_produce → queue_work_on(cpu)
+         worker: ptr_ring_consume → strip eth → validate IPv4 → encrypt → resolve peer → UDP send
+
 rx: UDP recv (encap_rcv) → enqueue + NAPI schedule → poll: strip UDP header → decrypt → validate IPv4 → add eth header → napi_gro_receive
 ```
 
 Encryption is an XOR stream cipher (64-bit repeating mask). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
-Both directions are processed synchronously: TX runs in the `ndo_start_xmit` path. RX is NAPI-based: the UDP `encap_rcv` callback enqueues skbs into a per-device RX queue and schedules NAPI; the poll routine drains the queue (bounded by `RX_Q_LIMIT` / NAPI budget), decrypts, and pushes up via `napi_gro_receive`.
+TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring, encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
+
+RX is NAPI-based: the UDP `encap_rcv` callback enqueues skbs into a per-device RX queue and schedules NAPI; the poll routine drains the queue (bounded by `RX_Q_LIMIT` / NAPI budget), decrypts, and pushes up via `napi_gro_receive`.
 
 ## Build & Install
 
@@ -109,8 +113,8 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, tx/rx paths
-types.h         tun_struct definition
+main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, async TX (ptr_ring + workqueue), rx paths
+types.h         tun_struct, tx_worker definitions
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
 crypt/impl.c    Encrypt/decrypt (XOR stream cipher)
@@ -126,6 +130,7 @@ ips/types.h     ips_entry, ips_storage types
 |------------------------|-----------------|-------------------------------|
 | `MTU`                  | 1472            | Device MTU (bytes)            |
 | `RX_Q_LIMIT`           | 4096            | RX NAPI queue depth (sk_buffs)|
+| `TX_RING_SIZE`         | 4096            | TX ptr_ring depth (sk_buffs)  |
 | `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
 | `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
 | `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |
