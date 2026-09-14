@@ -25,6 +25,7 @@
 #include <linux/udp.h>
 #include <linux/workqueue.h>
 #include <net/dst_cache.h>
+#include <net/gso.h>
 #include <net/sock.h>
 #include <net/udp.h>
 #include <net/udp_tunnel.h>
@@ -53,6 +54,95 @@ MODULE_PARM_DESC(src_port, "Source UDP port");
 
 static struct net_device* tdev;
 
+static void txskb(struct tun_struct* tun, struct net_device* dev, struct sk_buff* skb)
+{
+    if (unlikely(skb_linearize(skb))) {
+        dev->stats.tx_dropped++;
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL && skb_checksum_help(skb))) {
+        dev->stats.tx_errors++;
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    if (unlikely(!skb_pull(skb, ETH_HLEN))) {
+        dev->stats.tx_dropped++;
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    skb_reset_network_header(skb);
+
+    if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
+        dev->stats.tx_dropped++;
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
+
+    if (unlikely(encrypt(skb->data, skb->len))) {
+        dev->stats.tx_errors++;
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    rcu_read_lock();
+#ifdef SERVER
+    struct ips_storage* ips = READ_ONCE(tun->ips);
+
+    if (unlikely(!ips)) {
+        dev->stats.tx_errors++;
+        rcu_read_unlock();
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    struct ips_entry* entry = ips_get(ips, daddr);
+
+    if (unlikely(IS_ERR_OR_NULL(entry))) {
+        dev->stats.tx_errors++;
+        rcu_read_unlock();
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    __be32 dip = READ_ONCE(entry->ip);
+    __be16 dport = READ_ONCE(entry->port);
+    struct dst_cache* dc = &entry->dst_cache;
+#else
+    __be32 dip = READ_ONCE(tun->dip);
+    __be16 dport = READ_ONCE(tun->dport);
+    struct dst_cache* dc = &tun->dst_cache;
+#endif
+
+    struct socket* sock = READ_ONCE(tun->sock);
+
+    if (unlikely(!sock)) {
+        dev->stats.tx_errors++;
+        rcu_read_unlock();
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    u32 len = skb->len;
+    skb->dev = NULL;
+
+    if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
+        dev->stats.tx_errors++;
+        rcu_read_unlock();
+        dev_kfree_skb_any(skb);
+        return;
+    }
+
+    rcu_read_unlock();
+
+    dev_sw_netstats_tx_add(dev, 1, len);
+}
+
 static void tx(struct work_struct* work)
 {
     struct tx_worker* txw = container_of(work, struct tx_worker, work);
@@ -61,79 +151,25 @@ static void tx(struct work_struct* work)
     struct sk_buff* skb;
 
     while ((skb = ptr_ring_consume_bh(&tun->tx_ring)) != NULL) {
+        if (skb_is_gso(skb)) {
+            struct sk_buff* skbs = skb_gso_segment(skb, 0);
 
-        bool sent = false;
+            if (IS_ERR_OR_NULL(skbs)) {
+                dev->stats.tx_errors++;
+                dev_kfree_skb_any(skb);
+            } else {
+                dev_kfree_skb_any(skb);
 
-        if (unlikely(!skb_pull(skb, ETH_HLEN))) {
-            dev->stats.tx_dropped++;
-            goto next;
-        }
-
-        skb_reset_network_header(skb);
-
-        if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
-            dev->stats.tx_dropped++;
-            goto next;
-        }
-
-        [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
-
-        if (unlikely(encrypt(skb->data, skb->len))) {
-            dev->stats.tx_errors++;
-            goto next;
-        }
-
-        rcu_read_lock();
-#ifdef SERVER
-        struct ips_storage* ips = READ_ONCE(tun->ips);
-
-        if (unlikely(!ips)) {
-            dev->stats.tx_errors++;
-            rcu_read_unlock();
-            goto next;
-        }
-
-        struct ips_entry* entry = ips_get(ips, daddr);
-
-        if (unlikely(IS_ERR_OR_NULL(entry))) {
-            dev->stats.tx_errors++;
-            rcu_read_unlock();
-            goto next;
-        }
-
-        __be32 dip = READ_ONCE(entry->ip);
-        __be16 dport = READ_ONCE(entry->port);
-        struct dst_cache* dc = &entry->dst_cache;
-#else
-        __be32 dip = READ_ONCE(tun->dip);
-        __be16 dport = READ_ONCE(tun->dport);
-        struct dst_cache* dc = &tun->dst_cache;
-#endif
-
-        struct socket* sock = READ_ONCE(tun->sock);
-
-        if (unlikely(!sock)) {
-            dev->stats.tx_errors++;
-            rcu_read_unlock();
-            goto next;
-        }
-
-        u32 len = skb->len;
-
-        if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
-            dev->stats.tx_errors++;
-            rcu_read_unlock();
-            goto next;
-        }
-
-        rcu_read_unlock();
-
-        dev_sw_netstats_tx_add(dev, 1, len);
-        sent = true;
-
-    next:
-        if (!sent) {
-            dev_kfree_skb_any(skb);
+                while (skbs) {
+                    skb = skbs;
+                    skbs = skb->next;
+                    skb->next = NULL;
+                    skb->prev = NULL;
+                    txskb(tun, dev, skb);
+                }
+            }
+        } else {
+            txskb(tun, dev, skb);
         }
 
         if (need_resched()) {
@@ -210,6 +246,26 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
     return 0;
 }
 
+static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
+{
+    struct tun_struct* tun = netdev_priv(dev);
+
+    skb_orphan(skb);
+    if (unlikely(!tun || ptr_ring_produce_bh(&tun->tx_ring, skb))) {
+        dev->stats.tx_dropped++;
+        dev_kfree_skb_any(skb);
+        return NETDEV_TX_OK;
+    }
+
+    int cpu = cpumask_next_wrap(READ_ONCE(tun->last_cpu), cpu_online_mask, -1, 1);
+
+    WRITE_ONCE(tun->last_cpu, cpu);
+
+    queue_work_on(cpu, tun->tx_wq, &per_cpu_ptr(tun->tx_workers, cpu)->work);
+
+    return NETDEV_TX_OK;
+}
+
 static int npoll(struct napi_struct* napi, int budget)
 {
     struct tun_struct* tun = container_of(napi, struct tun_struct, napi);
@@ -273,28 +329,6 @@ static int dstop(struct net_device* dev)
     return 0;
 }
 
-static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
-{
-    struct tun_struct* tun = netdev_priv(dev);
-
-    skb_orphan(skb);
-    if (unlikely(!tun || ptr_ring_produce_bh(&tun->tx_ring, skb))) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb_any(skb);
-        return NETDEV_TX_OK;
-    }
-
-    int cpu = cpumask_next(READ_ONCE(tun->last_cpu), cpu_online_mask);
-    if (cpu >= nr_cpu_ids) {
-        cpu = cpumask_first(cpu_online_mask);
-    }
-    WRITE_ONCE(tun->last_cpu, cpu);
-
-    queue_work_on(cpu, tun->tx_wq, &per_cpu_ptr(tun->tx_workers, cpu)->work);
-
-    return NETDEV_TX_OK;
-}
-
 static const struct net_device_ops ops = {
     .ndo_open       = dopen,
     .ndo_stop       = dstop,
@@ -308,10 +342,9 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
-    dev->features &= ~NETIF_F_IP_CSUM;
-    dev->features &= ~NETIF_F_SG;
-    dev->features &= ~NETIF_F_TSO;
-    dev->features &= ~NETIF_F_GSO;
+    dev->features |= NETIF_F_IP_CSUM;
+    dev->features |= NETIF_F_SG;
+    dev->features |= NETIF_F_TSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
@@ -388,7 +421,7 @@ static int __init minit(void)
         goto err_ptr_ring;
     }
 
-    tun->tx_wq = alloc_workqueue("tnet_tx", WQ_UNBOUND | WQ_HIGHPRI, 0);
+    tun->tx_wq = alloc_workqueue("tnet_tx", WQ_HIGHPRI, 0);
     if (!tun->tx_wq) {
         err = -ENOMEM;
         pr_err("tnet: alloc_workqueue failed\n");
@@ -417,9 +450,7 @@ static int __init minit(void)
         goto err_wq;
     }
 
-    pr_info("tnet: module loaded, device %s registered "
-            "(tx_ring=%d, cpus=%d)\n",
-            tdev->name, TX_RING_SIZE, num_online_cpus());
+    pr_info("tnet: module loaded\n");
     return 0;
 
 err_wq:
