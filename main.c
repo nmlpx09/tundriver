@@ -5,23 +5,17 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <linux/compiler.h>
 #include <linux/cpumask.h>
 #include <linux/err.h>
-#include <linux/errno.h>
 #include <linux/etherdevice.h>
-#include <linux/if_ether.h>
 #include <linux/inet.h>
-#include <linux/ip.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
-#include <linux/printk.h>
 #include <linux/ptr_ring.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/skbuff.h>
-#include <linux/string.h>
 #include <linux/udp.h>
 #include <linux/workqueue.h>
 #include <net/dst_cache.h>
