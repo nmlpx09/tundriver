@@ -40,6 +40,7 @@
 #define MTU 1472
 #define RX_Q_LIMIT 4096
 #define TX_RING_SIZE 4096
+#define TX_BATCH 32
 
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
@@ -148,28 +149,33 @@ static void tx(struct work_struct* work)
     struct tx_worker* txw = container_of(work, struct tx_worker, work);
     struct tun_struct* tun = txw->ptr;
     struct net_device* dev = tun->dev;
-    struct sk_buff* skb;
+    struct sk_buff* batch[TX_BATCH];
+    int n, i;
 
-    while ((skb = ptr_ring_consume_bh(&tun->tx_ring)) != NULL) {
-        if (skb_is_gso(skb)) {
-            struct sk_buff* skbs = skb_gso_segment(skb, 0);
+    while ((n = ptr_ring_consume_batched_bh(&tun->tx_ring, (void**)batch, TX_BATCH)) > 0) {
+        for (i = 0; i < n; i++) {
+            struct sk_buff* skb = batch[i];
 
-            if (IS_ERR_OR_NULL(skbs)) {
-                dev->stats.tx_errors++;
-                dev_kfree_skb_any(skb);
-            } else {
-                dev_kfree_skb_any(skb);
+            if (skb_is_gso(skb)) {
+                struct sk_buff* skbs = skb_gso_segment(skb, 0);
 
-                while (skbs) {
-                    skb = skbs;
-                    skbs = skb->next;
-                    skb->next = NULL;
-                    skb->prev = NULL;
-                    txskb(tun, dev, skb);
+                if (IS_ERR_OR_NULL(skbs)) {
+                    dev->stats.tx_errors++;
+                    dev_kfree_skb_any(skb);
+                } else {
+                    dev_kfree_skb_any(skb);
+
+                    while (skbs) {
+                        skb = skbs;
+                        skbs = skb->next;
+                        skb->next = NULL;
+                        skb->prev = NULL;
+                        txskb(tun, dev, skb);
+                    }
                 }
+            } else {
+                txskb(tun, dev, skb);
             }
-        } else {
-            txskb(tun, dev, skb);
         }
 
         if (need_resched()) {
