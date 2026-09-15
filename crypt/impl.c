@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * tnet - encrypt/decrypt (XOR stream cipher, unaligned + endian-safe)
+ * tnet - encrypt/decrypt (substitution cipher)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <asm/byteorder.h>
 #include <linux/compiler.h>
 #include <linux/errno.h>
 #include <linux/types.h>
-#include <linux/unaligned.h>
 
 #include "impl.h"
-
-#define MASK 0x137d95ef43652c81
+#include "table.h"
 
 int encrypt(u8* buf, size_t bufl)
 {
@@ -21,15 +18,8 @@ int encrypt(u8* buf, size_t bufl)
         return -EINVAL;
     }
 
-    const u64 mask_be = MASK;
-    const u8* mb = (const u8*)&mask_be;
-
-    size_t i = 0;
-    for (; i + 8 <= bufl; i += 8) {
-        put_unaligned(get_unaligned(buf + i) ^ mask_be, buf + i);
-    }
-    for (; i < bufl; ++i) {
-        buf[i] ^= mb[i % 8];
+    for (size_t i = 0; i < bufl; ++i) {
+        buf[i] = ENCRYPT_TABLE[buf[i]];
     }
 
     return 0;
@@ -37,5 +27,13 @@ int encrypt(u8* buf, size_t bufl)
 
 int decrypt(u8* buf, size_t bufl)
 {
-    return encrypt(buf, bufl);
+    if (unlikely(!buf)) {
+        return -EINVAL;
+    }
+
+    for (size_t i = 0; i < bufl; ++i) {
+        buf[i] = DECRYPT_TABLE[buf[i]];
+    }
+
+    return 0;
 }

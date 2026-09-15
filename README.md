@@ -26,7 +26,7 @@ tx: ndo_start_xmit → skb_orphan → ptr_ring_produce_bh → queue_work_on(cpu)
 rx: UDP recv (encap_rcv) → enqueue + NAPI schedule → poll: strip UDP header → decrypt → validate IPv4 → add eth header → napi_gro_receive
 ```
 
-Encryption is an XOR stream cipher (64-bit repeating mask). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
+Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
 TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`TX_BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
@@ -117,8 +117,9 @@ main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, async TX 
 types.h         tun_struct, tx_worker definitions
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
-crypt/impl.c    Encrypt/decrypt (XOR stream cipher)
+crypt/impl.c    Encrypt/decrypt (substitution cipher)
 crypt/impl.h
+crypt/table.h   256-byte encrypt/decrypt lookup tables
 ips/impl.c      IPS table (RCU hashtable, add/get/expire)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
@@ -138,7 +139,7 @@ ips/types.h     ips_entry, ips_storage types
 
 ## WIP
 
-- AES-128-GCM encryption (replace XOR stream cipher)
+- AES-128-GCM encryption (replace substitution cipher)
 
 ## License
 
