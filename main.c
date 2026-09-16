@@ -19,7 +19,6 @@
 #include <linux/udp.h>
 #include <linux/workqueue.h>
 #include <net/dst_cache.h>
-#include <net/gso.h>
 #include <net/sock.h>
 #include <net/udp.h>
 #include <net/udp_tunnel.h>
@@ -49,129 +48,94 @@ MODULE_PARM_DESC(src_port, "Source UDP port");
 
 static struct net_device* tdev;
 
-static void txskb(struct tun_struct* tun, struct net_device* dev, struct sk_buff* skb)
-{
-    if (unlikely(skb_linearize(skb))) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL && skb_checksum_help(skb))) {
-        dev->stats.tx_errors++;
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    if (unlikely(!skb_pull(skb, ETH_HLEN))) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    skb_reset_network_header(skb);
-
-    if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
-        dev->stats.tx_dropped++;
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
-
-    if (unlikely(encrypt(skb->data, skb->len))) {
-        dev->stats.tx_errors++;
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    rcu_read_lock();
-#ifdef SERVER
-    struct ips_storage* ips = READ_ONCE(tun->ips);
-
-    if (unlikely(!ips)) {
-        dev->stats.tx_errors++;
-        rcu_read_unlock();
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    struct ips_entry* entry = ips_get(ips, daddr);
-
-    if (unlikely(IS_ERR_OR_NULL(entry))) {
-        dev->stats.tx_errors++;
-        rcu_read_unlock();
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    __be32 dip = READ_ONCE(entry->ip);
-    __be16 dport = READ_ONCE(entry->port);
-    struct dst_cache* dc = &entry->dst_cache;
-#else
-    __be32 dip = READ_ONCE(tun->dip);
-    __be16 dport = READ_ONCE(tun->dport);
-    struct dst_cache* dc = &tun->dst_cache;
-#endif
-
-    struct socket* sock = READ_ONCE(tun->sock);
-
-    if (unlikely(!sock)) {
-        dev->stats.tx_errors++;
-        rcu_read_unlock();
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    u32 len = skb->len;
-    skb->dev = NULL;
-
-    if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
-        dev->stats.tx_errors++;
-        rcu_read_unlock();
-        dev_kfree_skb_any(skb);
-        return;
-    }
-
-    rcu_read_unlock();
-
-    dev_sw_netstats_tx_add(dev, 1, len);
-}
-
 static void tx(struct work_struct* work)
 {
     struct tx_worker* txw = container_of(work, struct tx_worker, work);
     struct tun_struct* tun = txw->ptr;
     struct net_device* dev = tun->dev;
     struct sk_buff* batch[TX_BATCH];
+    struct sk_buff* skb = NULL;
     int n, i;
 
     while ((n = ptr_ring_consume_batched_bh(&tun->tx_ring, (void**)batch, TX_BATCH)) > 0) {
         for (i = 0; i < n; i++) {
-            struct sk_buff* skb = batch[i];
+            skb = batch[i];
 
-            if (skb_is_gso(skb)) {
-                struct sk_buff* skbs = skb_gso_segment(skb, 0);
-
-                if (IS_ERR_OR_NULL(skbs)) {
-                    dev->stats.tx_errors++;
-                    dev_kfree_skb_any(skb);
-                } else {
-                    dev_kfree_skb_any(skb);
-
-                    while (skbs) {
-                        skb = skbs;
-                        skbs = skb->next;
-                        skb->next = NULL;
-                        skb->prev = NULL;
-                        txskb(tun, dev, skb);
-                    }
-                }
-            } else {
-                txskb(tun, dev, skb);
+            if (unlikely(!skb_pull(skb, ETH_HLEN))) {
+                dev->stats.tx_dropped++;
+                dev_kfree_skb_any(skb);
+                return;
             }
-        }
 
+            skb_reset_network_header(skb);
+
+            if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
+                dev->stats.tx_dropped++;
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
+
+            if (unlikely(encrypt(skb->data, skb->len))) {
+                dev->stats.tx_errors++;
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            rcu_read_lock();
+        #ifdef SERVER
+            struct ips_storage* ips = READ_ONCE(tun->ips);
+
+            if (unlikely(!ips)) {
+                dev->stats.tx_errors++;
+                rcu_read_unlock();
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            struct ips_entry* entry = ips_get(ips, daddr);
+
+            if (unlikely(IS_ERR_OR_NULL(entry))) {
+                dev->stats.tx_errors++;
+                rcu_read_unlock();
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            __be32 dip = READ_ONCE(entry->ip);
+            __be16 dport = READ_ONCE(entry->port);
+            struct dst_cache* dc = &entry->dst_cache;
+        #else
+            __be32 dip = READ_ONCE(tun->dip);
+            __be16 dport = READ_ONCE(tun->dport);
+            struct dst_cache* dc = &tun->dst_cache;
+        #endif
+
+            struct socket* sock = READ_ONCE(tun->sock);
+
+            if (unlikely(!sock)) {
+                dev->stats.tx_errors++;
+                rcu_read_unlock();
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            u32 len = skb->len;
+            skb->dev = NULL;
+
+            if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
+                dev->stats.tx_errors++;
+                rcu_read_unlock();
+                dev_kfree_skb_any(skb);
+                return;
+            }
+
+            rcu_read_unlock();
+
+            dev_sw_netstats_tx_add(dev, 1, len);
+
+        }
         if (need_resched()) {
             cond_resched();
         }
@@ -342,9 +306,10 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
-    dev->features |= NETIF_F_IP_CSUM;
-    dev->features |= NETIF_F_SG;
-    dev->features |= NETIF_F_TSO;
+    dev->features &= ~NETIF_F_IP_CSUM;
+    dev->features &= ~NETIF_F_SG;
+    dev->features &= ~NETIF_F_TSO;
+    dev->features &= ~NETIF_F_GSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
