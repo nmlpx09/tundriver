@@ -121,9 +121,6 @@ static void tx(struct work_struct* work)
                 return;
             }
 
-            u32 len = skb->len;
-            skb->dev = NULL;
-
             if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
                 dev->stats.tx_errors++;
                 rcu_read_unlock();
@@ -133,11 +130,9 @@ static void tx(struct work_struct* work)
 
             rcu_read_unlock();
 
-            dev_sw_netstats_tx_add(dev, 1, len);
-
-        }
-        if (need_resched()) {
-            cond_resched();
+            if (need_resched()) {
+                cond_resched();
+            }
         }
     }
 }
