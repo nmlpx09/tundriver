@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * tnet - IPS table (RCU hashtable, add/get/expire)
+ * tnet - IPS table (hashtable, add/get)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
@@ -10,8 +10,6 @@
 #include <linux/errno.h>
 #include <linux/hashtable.h>
 #include <linux/kernel.h>
-#include <linux/ktime.h>
-#include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <net/dst_cache.h>
@@ -21,11 +19,8 @@
 
 #include "impl.h"
 
-static void ips_entry_free_rcu(struct rcu_head* rhf)
-{
-    struct ips_entry* entry = container_of(rhf, struct ips_entry, rhf);
-    dst_cache_destroy(&entry->dst_cache);
-    kfree(entry);
+static __be32 get_key8(__be32 key) {
+    return key & 0x000000FF;
 }
 
 struct ips_storage* ips_init(void)
@@ -37,7 +32,6 @@ struct ips_storage* ips_init(void)
     }
 
     hash_init(storage->table);
-    storage->ts = ktime_get_ns();
 
     return storage;
 }
@@ -53,11 +47,11 @@ void ips_close(struct ips_storage* storage)
     int i;
 
     hash_for_each_safe(storage->table, i, tmp, entry, node) {
-        hash_del_rcu(&entry->node);
-        call_rcu(&entry->rhf, ips_entry_free_rcu);
+        hash_del(&entry->node);
+        dst_cache_destroy(&entry->dst_cache);
+        kfree(entry);
     }
 
-    synchronize_rcu();
     kfree(storage);
 }
 
@@ -69,8 +63,10 @@ struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
 
     struct ips_entry* entry;
 
-    hash_for_each_possible(storage->table, entry, node, (__force u32)key) {
-        if (entry->key == key) {
+    __be32 key8 = get_key8(key);
+
+    hash_for_each_possible(storage->table, entry, node, (__force u32)key8) {
+        if (entry->key == key8) {
             return entry;
         }
     }
@@ -86,21 +82,9 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return -EINVAL;
     }
 
-    u64 now = ktime_get_ns();
-    if (unlikely(now - storage->ts > IPS_CHECK_DELAY_NS)) {
-        storage->ts = now;
+    __be32 key8 = get_key8(key);
 
-        struct hlist_node* tmp;
-        int i;
-        hash_for_each_safe(storage->table, i, tmp, entry, node) {
-            if (unlikely(now - entry->ts > IPS_REMOVE_DELAY_NS)) {
-                hash_del_rcu(&entry->node);
-                call_rcu(&entry->rhf, ips_entry_free_rcu);
-            }
-        }
-    }
-
-    entry = ips_get(storage, key);
+    entry = ips_get(storage, key8);
 
     if (likely(entry)) {
         if (unlikely(entry->ip != ip || entry->port != port)) {
@@ -108,7 +92,6 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
             WRITE_ONCE(entry->port, port);
             dst_cache_reset(&entry->dst_cache);
         }
-        WRITE_ONCE(entry->ts, now);
         return 0;
     }
 
@@ -123,11 +106,10 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return err;
     }
 
-    entry->key = key;
+    entry->key = key8;
     entry->ip = ip;
     entry->port = port;
-    entry->ts = now;
-    hash_add_rcu(storage->table, &entry->node, (__force u32)key);
+    hash_add_rcu(storage->table, &entry->node, (__force u32)key8);
 
     return 0;
 }

@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/ptr_ring.h>
-#include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/skbuff.h>
 #include <linux/udp.h>
@@ -83,13 +82,11 @@ static void tx(struct work_struct* work)
                 return;
             }
 
-            rcu_read_lock();
         #ifdef SERVER
             struct ips_storage* ips = READ_ONCE(tun->ips);
 
             if (unlikely(!ips)) {
                 dev->stats.tx_errors++;
-                rcu_read_unlock();
                 dev_kfree_skb_any(skb);
                 return;
             }
@@ -98,7 +95,6 @@ static void tx(struct work_struct* work)
 
             if (unlikely(IS_ERR_OR_NULL(entry))) {
                 dev->stats.tx_errors++;
-                rcu_read_unlock();
                 dev_kfree_skb_any(skb);
                 return;
             }
@@ -116,19 +112,15 @@ static void tx(struct work_struct* work)
 
             if (unlikely(!sock)) {
                 dev->stats.tx_errors++;
-                rcu_read_unlock();
                 dev_kfree_skb_any(skb);
                 return;
             }
 
             if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
                 dev->stats.tx_errors++;
-                rcu_read_unlock();
                 dev_kfree_skb_any(skb);
                 return;
             }
-
-            rcu_read_unlock();
 
             if (need_resched()) {
                 cond_resched();

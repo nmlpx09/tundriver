@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * tnet - IPS table (RCU hashtable, add/get/expire)
+ * tnet - IPS table (hashtable, add/get)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
