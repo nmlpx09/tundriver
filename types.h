@@ -37,8 +37,8 @@ struct tun_struct {
     } __percpu* tx_workers;
     int last_cpu;
 
-    __be32 dip;
-    __be16 dport;
+    __be32 tip;
+    __be16 tport;
 };
 
 #endif

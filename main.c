@@ -93,18 +93,18 @@ static void tx(struct work_struct* work)
                 return;
             }
 
-            __be32 dip = READ_ONCE(entry->ip);
-            __be16 dport = READ_ONCE(entry->port);
+            __be32 tip = READ_ONCE(entry->ip);
+            __be16 tport = READ_ONCE(entry->port);
             struct dst_cache* dc = &entry->dst_cache;
         #else
-            __be32 dip = READ_ONCE(tun->dip);
-            __be16 dport = READ_ONCE(tun->dport);
+            __be32 tip = READ_ONCE(tun->tip);
+            __be16 tport = READ_ONCE(tun->tport);
             struct dst_cache* dc = &tun->dst_cache;
         #endif
 
             struct socket* sock = READ_ONCE(tun->sock);
 
-            if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
+            if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
                 return;
@@ -292,10 +292,10 @@ static void dsetup(struct net_device* dev)
 
 static int __init minit(void)
 {
-    __be32 dip;
+    __be32 tip;
     int err, cpu;
 
-    if (!in4_pton(dest_ip, -1, (u8*)&dip, -1, NULL)) {
+    if (!in4_pton(dest_ip, -1, (u8*)&tip, -1, NULL)) {
         pr_err("tnet: invalid dest_ip: %s\n", dest_ip);
         return -EINVAL;
     }
@@ -319,8 +319,8 @@ static int __init minit(void)
     struct tun_struct* tun = netdev_priv(tdev);
 
     tun->dev = tdev;
-    tun->dip = dip;
-    tun->dport = htons(dest_port);
+    tun->tip = tip;
+    tun->tport = htons(dest_port);
 
     tun->sock = sock_init(htons(src_port));
     if (IS_ERR(tun->sock)) {
