@@ -30,8 +30,8 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
-#define RX_Q_LIMIT 4096
-#define TX_RING_SIZE 4096
+#define RX_Q_LIMIT 1024
+#define TX_RING_SIZE 1024
 #define TX_BATCH 32
 
 static char* dest_ip = "0.0.0.0";
@@ -85,12 +85,6 @@ static void tx(struct work_struct* work)
         #ifdef SERVER
             struct ips_storage* ips = READ_ONCE(tun->ips);
 
-            if (unlikely(!ips)) {
-                dev->stats.tx_errors++;
-                dev_kfree_skb_any(skb);
-                return;
-            }
-
             struct ips_entry* entry = ips_get(ips, daddr);
 
             if (unlikely(IS_ERR_OR_NULL(entry))) {
@@ -109,12 +103,6 @@ static void tx(struct work_struct* work)
         #endif
 
             struct socket* sock = READ_ONCE(tun->sock);
-
-            if (unlikely(!sock)) {
-                dev->stats.tx_errors++;
-                dev_kfree_skb_any(skb);
-                return;
-            }
 
             if (unlikely(sock_send(sock, skb, dc, dip, dport))) {
                 dev->stats.tx_errors++;
@@ -161,12 +149,10 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
 #ifdef SERVER
     struct ips_storage* ips = READ_ONCE(tun->ips);
 
-    if (unlikely(!ips)) {
+    if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
         dev->stats.rx_errors++;
         return -1;
     }
-
-    ips_add(ips, ip_hdr(skb)->saddr, tip, tport);
 #endif
 
     if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
