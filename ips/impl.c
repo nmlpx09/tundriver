@@ -14,9 +14,6 @@
 #include <linux/types.h>
 #include <net/dst_cache.h>
 
-#define IPS_CHECK_DELAY_NS (600ull * NSEC_PER_SEC)
-#define IPS_REMOVE_DELAY_NS (3600ull * NSEC_PER_SEC)
-
 #include "impl.h"
 
 static __be32 get_key8(__be32 key) {
@@ -109,7 +106,7 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
     entry->key = key8;
     entry->ip = ip;
     entry->port = port;
-    hash_add_rcu(storage->table, &entry->node, (__force u32)key8);
+    hash_add(storage->table, &entry->node, (__force u32)key8);
 
     return 0;
 }
