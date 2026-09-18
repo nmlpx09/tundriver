@@ -419,11 +419,6 @@ static void __exit mexit(void)
 
     unregister_netdev(tdev);
 
-    destroy_workqueue(tun->tx_wq);
-
-    ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
-    free_percpu(tun->tx_workers);
-
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         lock_sock(sk);
@@ -433,21 +428,26 @@ static void __exit mexit(void)
         synchronize_net();
     }
 
-    dst_cache_destroy(&tun->dst_cache);
-
-    if (tun->ips) {
-        ips_close(tun->ips);
-        tun->ips = NULL;
-    }
-
     if (tun->sock) {
         sock_close(tun->sock);
-        tun->sock = NULL;
+        WRITE_ONCE(tun->sock, NULL);
     }
 
     napi_disable(&tun->napi);
     skb_queue_purge(&tun->rx_queue);
     netif_napi_del(&tun->napi);
+
+    destroy_workqueue(tun->tx_wq);
+
+    ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
+    free_percpu(tun->tx_workers);
+
+    dst_cache_destroy(&tun->dst_cache);
+
+    if (tun->ips) {
+        ips_close(tun->ips);
+        WRITE_ONCE(tun->ips, NULL);
+    }
 
     free_netdev(tdev);
 
