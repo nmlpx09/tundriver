@@ -15,7 +15,7 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 ```
 
 - **Client mode**: sends all encrypted traffic to a fixed `dest_ip:dest_port`
-- **Server mode**: dynamically maps client source IPs to their return addresses (IPS table with RCU + hashtable, 10-minute check / 1-hour expiry)
+- **Server mode**: dynamically maps client source IPs to their return addresses (IPS hashtable, 256 buckets; entries persist for module lifetime)
 
 ### Data flow
 
@@ -120,22 +120,19 @@ sock/impl.h
 crypt/impl.c    Encrypt/decrypt (substitution cipher)
 crypt/impl.h
 crypt/table.h   256-byte encrypt/decrypt lookup tables
-ips/impl.c      IPS table (RCU hashtable, add/get/expire)
+ips/impl.c      IPS hashtable (add/get/close)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
 ```
 
 ## Configuration
 
-| Constant               | Value           | Description                   |
-|------------------------|-----------------|-------------------------------|
-| `MTU`                  | 1472            | Device MTU (bytes)            |
-| `RX_Q_LIMIT`           | 4096            | RX NAPI queue depth (sk_buffs)|
-| `TX_RING_SIZE`         | 4096            | TX ptr_ring depth (sk_buffs)  |
-| `TX_BATCH`             | 32              | TX consume batch size         |
-| `IPS_HASH_BITS`        | 8               | IPS hashtable size (256)      |
-| `IPS_CHECK_DELAY_NS`   | 600s            | IPS expiry check interval     |
-| `IPS_REMOVE_DELAY_NS`  | 3600s           | IPS entry lifetime            |
+| Constant       | Value | Description                    |
+|----------------|-------|--------------------------------|
+| `MTU`          | 1472  | Device MTU (bytes)             |
+| `RX_Q_LIMIT`   | 1024  | RX NAPI queue depth (sk_buffs) |
+| `TX_RING_SIZE` | 1024  | TX ptr_ring depth (sk_buffs)  |
+| `TX_BATCH`     | 32    | TX consume batch size          |
 
 ## WIP
 

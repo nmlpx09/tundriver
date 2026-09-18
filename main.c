@@ -63,7 +63,7 @@ static void tx(struct work_struct* work)
             if (unlikely(!skb_pull(skb, ETH_HLEN))) {
                 dev->stats.tx_dropped++;
                 dev_kfree_skb_any(skb);
-                return;
+                continue;
             }
 
             skb_reset_network_header(skb);
@@ -71,7 +71,7 @@ static void tx(struct work_struct* work)
             if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
                 dev->stats.tx_dropped++;
                 dev_kfree_skb_any(skb);
-                return;
+                continue;
             }
 
             [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
@@ -79,7 +79,7 @@ static void tx(struct work_struct* work)
             if (unlikely(encrypt(skb->data, skb->len))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
-                return;
+                continue;
             }
 
         #ifdef SERVER
@@ -90,7 +90,7 @@ static void tx(struct work_struct* work)
             if (unlikely(IS_ERR_OR_NULL(entry))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
-                return;
+                continue;
             }
 
             __be32 tip = READ_ONCE(entry->ip);
@@ -107,12 +107,10 @@ static void tx(struct work_struct* work)
             if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
-                return;
+                continue;
             }
 
-            if (need_resched()) {
-                cond_resched();
-            }
+            cond_resched();
         }
     }
 }
@@ -342,10 +340,6 @@ static int __init minit(void)
         goto err_ips;
     }
 
-    skb_queue_head_init(&tun->rx_queue);
-    netif_napi_add(tdev, &tun->napi, npoll);
-    napi_enable(&tun->napi);
-
     err = ptr_ring_init(&tun->tx_ring, TX_RING_SIZE, GFP_KERNEL);
     if (err) {
         pr_err("tnet: ptr_ring_init failed: %d\n", err);
@@ -373,6 +367,10 @@ static int __init minit(void)
     }
 
     tun->last_cpu = cpumask_first(cpu_online_mask);
+
+    skb_queue_head_init(&tun->rx_queue);
+    netif_napi_add(tdev, &tun->napi, npoll);
+    napi_enable(&tun->napi);
 
     struct udp_tunnel_sock_cfg sock_cfg = {
         .sk_user_data = tun,
