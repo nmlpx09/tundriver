@@ -26,7 +26,7 @@ tx: ndo_start_xmit → skb_orphan → ptr_ring_produce_bh → queue_work_on(cpu)
 rx: UDP recv (encap_rcv) → enqueue + NAPI schedule → poll: strip UDP header → decrypt → validate IPv4 → add eth header → napi_gro_receive
 ```
 
-Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
+Encryption is ChaCha20-Poly1305 AEAD (256-bit key, 96-bit nonce, 128-bit auth tag) via the kernel crypto API. Each packet is transmitted as `[nonce(12)][ciphertext(N)][tag(16)]`. The nonce is a 4-byte prefix (1 direction bit + 31 random bits, generated at load) followed by a 64-bit big-endian atomic counter, so client and server nonce spaces never collide even though they share one key. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
 
 TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`TX_BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
@@ -69,11 +69,30 @@ make server && sudo make install_module && sudo make install_server
 
 ## Module Parameters
 
-| Parameter   | Type   | Permissions | Description             |
-|-------------|--------|-------------|-------------------------|
-| `dest_ip`   | charp  | 0444        | Destination IP address  |
-| `dest_port` | int    | 0444        | Destination UDP port    |
-| `src_port`  | int    | 0444        | Source UDP port         |
+| Parameter   | Type   | Permissions | Description                                   |
+|-------------|--------|-------------|-----------------------------------------------|
+| `dest_ip`   | charp  | 0444        | Destination IP address                        |
+| `dest_port` | int    | 0444        | Destination UDP port                          |
+| `src_port`  | int    | 0444        | Source UDP port                               |
+| `key`       | charp  | 0444        | ChaCha20-Poly1305 key (base64, 44 chars)      |
+
+The `key` parameter is required and must be identical on both peers. Generate one with, e.g.:
+
+```bash
+openssl rand -base64 32
+```
+
+The `tun` wrapper scripts read the key from `/etc/tnet/key` (a single 44-char
+base64 string; surrounding whitespace is ignored). Create it on both peers
+before starting the tunnel:
+
+```bash
+sudo install -d -m 0755 /etc/tnet
+openssl rand -base64 32 | sudo tee /etc/tnet/key >/dev/null
+sudo chmod 0600 /etc/tnet/key
+```
+
+The running kernel must have `CONFIG_CRYPTO_CHACHA20POLY1305` enabled (it is auto-loaded on demand when the module starts).
 
 ## Usage
 
@@ -117,9 +136,8 @@ main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, async TX 
 types.h         tun_struct, tx_worker definitions
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
-crypt/impl.c    Encrypt/decrypt (substitution cipher)
-crypt/impl.h
-crypt/table.h   256-byte encrypt/decrypt lookup tables
+crypt/impl.c    Encrypt/decrypt (ChaCha20-Poly1305 AEAD, kernel crypto API)
+crypt/impl.h    crypt API + KEY/NONCE/TAG size constants
 ips/impl.c      IPS hashtable (add/get/close)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
@@ -127,16 +145,18 @@ ips/types.h     ips_entry, ips_storage types
 
 ## Configuration
 
-| Constant       | Value | Description                    |
-|----------------|-------|--------------------------------|
-| `MTU`          | 1472  | Device MTU (bytes)             |
-| `RX_Q_LIMIT`   | 1024  | RX NAPI queue depth (sk_buffs) |
-| `TX_RING_SIZE` | 1024  | TX ptr_ring depth (sk_buffs)  |
-| `TX_BATCH`     | 32    | TX consume batch size          |
+| Constant       | Value | Description                                  |
+|----------------|-------|----------------------------------------------|
+| `MTU`          | 1444  | Device MTU (1500 − IP − UDP − nonce − tag)   |
+| `RX_Q_LIMIT`   | 1024  | RX NAPI queue depth (sk_buffs)               |
+| `TX_RING_SIZE` | 1024  | TX ptr_ring depth (sk_buffs)                 |
+| `TX_BATCH`     | 32    | TX consume batch size                        |
 
 ## WIP
 
-- AES-128-GCM encryption (replace substitution cipher)
+- Per-packet nonce replay protection (currently the receiver does not track a
+  reorder window; nonces are unique but not bounded by the receiver).
+- Key rotation / negotiation (currently a single static preshared key).
 
 ## License
 

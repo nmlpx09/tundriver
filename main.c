@@ -29,7 +29,7 @@
 #include "types.h"
 
 #define DEV_NAME "tnet%d"
-#define MTU 1472
+#define MTU (1500 - sizeof(struct iphdr) - sizeof(struct udphdr) - CRYPT_NONCE_SIZE - CRYPT_TAG_SIZE)
 #define RX_Q_LIMIT 1024
 #define TX_RING_SIZE 1024
 #define TX_BATCH 32
@@ -37,6 +37,7 @@
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
 static int src_port = 0;
+static char* key = "";
 
 module_param(dest_ip, charp, 0444);
 MODULE_PARM_DESC(dest_ip, "Destination IP address");
@@ -44,6 +45,8 @@ module_param(dest_port, int, 0444);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
 module_param(src_port, int, 0444);
 MODULE_PARM_DESC(src_port, "Source UDP port");
+module_param(key, charp, 0444);
+MODULE_PARM_DESC(key, "ChaCha20-Poly1305 key (base64, 44 chars)");
 
 static struct net_device* tdev;
 
@@ -76,7 +79,7 @@ static void tx(struct work_struct* work)
 
             [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
 
-            if (unlikely(encrypt(skb->data, skb->len))) {
+            if (unlikely(encrypt(skb))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
                 continue;
@@ -132,12 +135,12 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
     [[ maybe_unused ]] __be32 tip = ip_hdr(skb)->saddr;
     [[ maybe_unused ]] __be16 tport = udp_hdr(skb)->source;
 
-    skb_reset_network_header(skb);
-
-    if (unlikely(decrypt(skb->data, skb->len))) {
+    if (unlikely(decrypt(skb))) {
         dev->stats.rx_errors++;
         return -1;
     }
+
+    skb_reset_network_header(skb);
 
     if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
         dev->stats.rx_dropped++;
@@ -283,7 +286,8 @@ static void dsetup(struct net_device* dev)
     dev->features &= ~NETIF_F_GSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
-    dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
+    dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr) + CRYPT_NONCE_SIZE;
+    dev->needed_tailroom = CRYPT_TAG_SIZE;
 
     eth_hw_addr_random(dev);
 }
@@ -312,6 +316,11 @@ static int __init minit(void)
     if (!tdev) {
         pr_err("tnet: failed to allocate net device\n");
         return -ENOMEM;
+    }
+
+    err = crypt_init(key);
+    if (err) {
+        goto err_netdev;
     }
 
     struct tun_struct* tun = netdev_priv(tdev);
@@ -406,6 +415,7 @@ err_sock:
     sock_close(tun->sock);
 err_netdev:
     free_netdev(tdev);
+    crypt_exit();
     return err;
 }
 
@@ -450,6 +460,8 @@ static void __exit mexit(void)
     }
 
     free_netdev(tdev);
+
+    crypt_exit();
 
     pr_info("tnet: module unloaded\n");
 }

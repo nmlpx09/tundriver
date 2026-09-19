@@ -9,6 +9,7 @@ OUT_DEVICE=`ip route get 1.1.1.1 | head -1 | cut -d ' ' -f 5`
 SRC_PORT=69
 
 MODULE=tnet
+KEY_FILE=/etc/tnet/key
 
 function check_sudo {
     if [ $EUID -ne 0 ]; then
@@ -44,12 +45,15 @@ function check_vars {
     [[ -z $OUT_DEVICE ]] && empty_vars+=(OUT_DEVICE)
     [[ -z $SRC_PORT ]] && empty_vars+=(SRC_PORT)
     [[ -z $MODULE ]]     && empty_vars+=(MODULE)
+    [[ -z $KEY ]]        && empty_vars+=(KEY)
 
     if [[ ${#empty_vars[@]} -gt 0 ]]; then
         echo "empty vars: ${empty_vars[*]}"
         exit 1
     fi
 }
+
+KEY=$(tr -d '[:space:]' < $KEY_FILE 2>/dev/null || true)
 
 check_sudo
 check_vars
@@ -58,7 +62,7 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        modprobe $MODULE src_port=$SRC_PORT
+        modprobe $MODULE src_port=$SRC_PORT key=$KEY
 
         add_rules
         ;;
@@ -77,7 +81,7 @@ case $1 in
         modprobe -r $MODULE
         remove_rules
 
-        modprobe $MODULE src_port=$SRC_PORT
+        modprobe $MODULE src_port=$SRC_PORT key=$KEY
         add_rules
 
         ;;

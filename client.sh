@@ -2,8 +2,10 @@
 
 set -exu
 
-DEST_IP=
+DEST_IP=66.248.207.187
 DEST_PORT=69
+
+KEY_FILE=/etc/tnet/key
 
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.2
@@ -40,6 +42,7 @@ function check_vars {
 
     [[ -z $DEST_IP ]]   && empty_vars+=(DEST_IP)
     [[ -z $DEST_PORT ]] && empty_vars+=(DEST_PORT)
+    [[ -z $KEY ]]       && empty_vars+=(KEY)
     [[ -z $TUN_DEVICE ]]  && empty_vars+=(TUN_DEVICE)
     [[ -z $TUN_IP ]]      && empty_vars+=(TUN_IP)
     [[ -z $MODULE ]]      && empty_vars+=(MODULE)
@@ -50,6 +53,8 @@ function check_vars {
     fi
 }
 
+KEY=$(tr -d '[:space:]' < $KEY_FILE 2>/dev/null || true)
+
 check_sudo
 check_vars
 
@@ -57,7 +62,7 @@ case $1 in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        modprobe $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT
+        modprobe $MODULE dest_ip=$DEST_IP dest_port=$DEST_PORT key=$KEY
 
         add_rules
         ;;
