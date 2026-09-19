@@ -8,7 +8,6 @@
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/in.h>
-#include <linux/ip.h>
 #include <linux/net.h>
 #include <linux/udp.h>
 #include <net/dst_cache.h>

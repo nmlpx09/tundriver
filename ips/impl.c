@@ -9,7 +9,6 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/hashtable.h>
-#include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <net/dst_cache.h>
@@ -17,7 +16,7 @@
 #include "impl.h"
 
 static __be32 get_key8(__be32 key) {
-    return key & 0xFF000000;
+    return key >> 24;
 }
 
 struct ips_storage* ips_init(void)
