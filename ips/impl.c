@@ -17,7 +17,7 @@
 #include "impl.h"
 
 static __be32 get_key8(__be32 key) {
-    return key & 0x000000FF;
+    return key & 0xFF000000;
 }
 
 struct ips_storage* ips_init(void)
