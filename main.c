@@ -74,7 +74,7 @@ static void tx(struct work_struct* work)
                 continue;
             }
 
-            [[ maybe_unused ]] __be32 daddr = ip_hdr(skb)->daddr;
+            __maybe_unused __be32 daddr = ip_hdr(skb)->daddr;
 
             if (unlikely(encrypt(skb->data, skb->len))) {
                 dev->stats.tx_errors++;
@@ -129,15 +129,15 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
         return -1;
     }
 
-    [[ maybe_unused ]] __be32 tip = ip_hdr(skb)->saddr;
-    [[ maybe_unused ]] __be16 tport = udp_hdr(skb)->source;
-
-    skb_reset_network_header(skb);
+    __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
+    __maybe_unused __be16 tport = udp_hdr(skb)->source;
 
     if (unlikely(decrypt(skb->data, skb->len))) {
         dev->stats.rx_errors++;
         return -1;
     }
+
+    skb_reset_network_header(skb);
 
     if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
         dev->stats.rx_dropped++;
@@ -186,7 +186,7 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
     struct tun_struct* tun = netdev_priv(dev);
 
     skb_orphan(skb);
-    if (unlikely(!tun || ptr_ring_produce_bh(&tun->tx_ring, skb))) {
+    if (unlikely(ptr_ring_produce_bh(&tun->tx_ring, skb))) {
         dev->stats.tx_dropped++;
         dev_kfree_skb_any(skb);
         return NETDEV_TX_OK;
@@ -390,15 +390,15 @@ static int __init minit(void)
     return 0;
 
 err_wq:
+    napi_disable(&tun->napi);
+    skb_queue_purge(&tun->rx_queue);
+    netif_napi_del(&tun->napi);
     destroy_workqueue(tun->tx_wq);
 err_percpu:
     free_percpu(tun->tx_workers);
 err_ptr_ring:
     ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
 err_cache:
-    napi_disable(&tun->napi);
-    skb_queue_purge(&tun->rx_queue);
-    netif_napi_del(&tun->napi);
     dst_cache_destroy(&tun->dst_cache);
 err_ips:
     ips_close(tun->ips);
@@ -419,6 +419,8 @@ static void __exit mexit(void)
 
     unregister_netdev(tdev);
 
+    destroy_workqueue(tun->tx_wq);
+
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         lock_sock(sk);
@@ -428,21 +430,19 @@ static void __exit mexit(void)
         synchronize_net();
     }
 
-    if (tun->sock) {
-        sock_close(tun->sock);
-        WRITE_ONCE(tun->sock, NULL);
-    }
-
     napi_disable(&tun->napi);
     skb_queue_purge(&tun->rx_queue);
     netif_napi_del(&tun->napi);
-
-    destroy_workqueue(tun->tx_wq);
 
     ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
     free_percpu(tun->tx_workers);
 
     dst_cache_destroy(&tun->dst_cache);
+
+    if (tun->sock) {
+        sock_close(tun->sock);
+        WRITE_ONCE(tun->sock, NULL);
+    }
 
     if (tun->ips) {
         ips_close(tun->ips);
