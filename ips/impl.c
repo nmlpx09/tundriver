@@ -78,9 +78,7 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return -EINVAL;
     }
 
-    __be32 key8 = get_key8(key);
-
-    entry = ips_get(storage, key8);
+    entry = ips_get(storage, key);
 
     if (likely(entry)) {
         if (unlikely(entry->ip != ip || entry->port != port)) {
@@ -101,6 +99,8 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         kfree(entry);
         return err;
     }
+
+    __be32 key8 = get_key8(key);
 
     entry->key = key8;
     entry->ip = ip;

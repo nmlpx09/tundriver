@@ -8,9 +8,9 @@
 #ifndef CRYPT_IMPL_H
 #define CRYPT_IMPL_H
 
-#include <linux/types.h>
+#include <linux/skbuff.h>
 
-int encrypt(u8* buf, size_t bufl);
-int decrypt(u8* buf, size_t bufl);
+int encrypt(struct sk_buff* skb);
+int decrypt(struct sk_buff* skb);
 
 #endif

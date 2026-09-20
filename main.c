@@ -76,7 +76,7 @@ static void tx(struct work_struct* work)
 
             __maybe_unused __be32 daddr = ip_hdr(skb)->daddr;
 
-            if (unlikely(encrypt(skb->data, skb->len))) {
+            if (unlikely(encrypt(skb))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
                 continue;
@@ -109,20 +109,14 @@ static void tx(struct work_struct* work)
                 dev_kfree_skb_any(skb);
                 continue;
             }
-
-            cond_resched();
         }
+        cond_resched();
     }
 }
 
 static int rx(struct tun_struct* tun, struct sk_buff* skb)
 {
     struct net_device* dev = tun->dev;
-
-    if (unlikely(skb_linearize(skb))) {
-        dev->stats.rx_dropped++;
-        return -1;
-    }
 
     if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
         dev->stats.rx_dropped++;
@@ -132,7 +126,7 @@ static int rx(struct tun_struct* tun, struct sk_buff* skb)
     __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
     __maybe_unused __be16 tport = udp_hdr(skb)->source;
 
-    if (unlikely(decrypt(skb->data, skb->len))) {
+    if (unlikely(decrypt(skb))) {
         dev->stats.rx_errors++;
         return -1;
     }
@@ -278,7 +272,6 @@ static void dsetup(struct net_device* dev)
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
     dev->features &= ~NETIF_F_IP_CSUM;
-    dev->features &= ~NETIF_F_SG;
     dev->features &= ~NETIF_F_TSO;
     dev->features &= ~NETIF_F_GSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
