@@ -30,9 +30,8 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
-#define RX_Q_LIMIT 1024
-#define TX_RING_SIZE 1024
-#define TX_BATCH 32
+#define RING_SIZE 1024
+#define BATCH 32
 
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
@@ -49,14 +48,14 @@ static struct net_device* tdev;
 
 static void tx(struct work_struct* work)
 {
-    struct tx_worker* txw = container_of(work, struct tx_worker, work);
+    struct worker* txw = container_of(work, struct worker, work);
     struct tun_struct* tun = txw->ptr;
     struct net_device* dev = tun->dev;
-    struct sk_buff* batch[TX_BATCH];
+    struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
     int n, i;
 
-    while ((n = ptr_ring_consume_batched_bh(&tun->tx_ring, (void**)batch, TX_BATCH)) > 0) {
+    while ((n = ptr_ring_consume_batched_bh(&tun->tx_ring, (void**)batch, BATCH)) > 0) {
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
@@ -114,65 +113,75 @@ static void tx(struct work_struct* work)
     }
 }
 
-static int rx(struct tun_struct* tun, struct sk_buff* skb)
+static void rx(struct work_struct* work)
 {
+    struct worker* rxw = container_of(work, struct worker, work);
+    struct tun_struct* tun = rxw->ptr;
     struct net_device* dev = tun->dev;
+    struct sk_buff* batch[BATCH];
+    struct sk_buff* skb = NULL;
+    int n, i;
 
-    if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
-        dev->stats.rx_dropped++;
-        return -1;
+    while ((n = ptr_ring_consume_batched_bh(&tun->rx_ring, (void**)batch, BATCH)) > 0) {
+        for (i = 0; i < n; i++) {
+            skb = batch[i];
+
+            if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
+                dev->stats.rx_dropped++;
+                continue;
+            }
+
+            __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
+            __maybe_unused __be16 tport = udp_hdr(skb)->source;
+
+            if (unlikely(decrypt(skb))) {
+                dev->stats.rx_errors++;
+                continue;
+            }
+
+            skb_reset_network_header(skb);
+
+            if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
+                dev->stats.rx_dropped++;
+                continue;
+            }
+
+        #ifdef SERVER
+            struct ips_storage* ips = READ_ONCE(tun->ips);
+
+            if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
+                dev->stats.rx_errors++;
+                continue;
+            }
+        #endif
+
+            if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
+                dev->stats.rx_errors++;
+                continue;
+            }
+
+            skb_dst_drop(skb);
+            skb_orphan(skb);
+            skb_clear_hash(skb);
+            skb->mark = 0;
+            skb->priority = 0;
+            skb->encapsulation = 0;
+
+            struct ethhdr* eth = skb_push(skb, ETH_HLEN);
+            memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
+            memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
+            eth->h_proto = htons(ETH_P_IP);
+
+            skb->dev = dev;
+            skb->protocol = eth_type_trans(skb, dev);
+            skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+            dev_sw_netstats_rx_add(dev, skb->len);
+
+            netif_rx(skb);
+        }
+        cond_resched();
     }
-
-    __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
-    __maybe_unused __be16 tport = udp_hdr(skb)->source;
-
-    if (unlikely(decrypt(skb))) {
-        dev->stats.rx_errors++;
-        return -1;
-    }
-
-    skb_reset_network_header(skb);
-
-    if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
-        dev->stats.rx_dropped++;
-        return -1;
-    }
-
-#ifdef SERVER
-    struct ips_storage* ips = READ_ONCE(tun->ips);
-
-    if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
-        dev->stats.rx_errors++;
-        return -1;
-    }
-#endif
-
-    if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
-        dev->stats.rx_errors++;
-        return -1;
-    }
-
-    skb_dst_drop(skb);
-    skb_orphan(skb);
-    skb_clear_hash(skb);
-    skb->mark = 0;
-    skb->priority = 0;
-    skb->encapsulation = 0;
-
-    struct ethhdr* eth = skb_push(skb, ETH_HLEN);
-    memcpy(eth->h_dest, dev->dev_addr, ETH_ALEN);
-    memcpy(eth->h_source, dev->dev_addr, ETH_ALEN);
-    eth->h_proto = htons(ETH_P_IP);
-
-    skb->dev = dev;
-    skb->protocol = eth_type_trans(skb, dev);
-    skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-    dev_sw_netstats_rx_add(dev, skb->len);
-
-    napi_gro_receive(&tun->napi, skb);
-
-    return 0;
 }
 
 static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
@@ -186,38 +195,13 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
         return NETDEV_TX_OK;
     }
 
-    int cpu = cpumask_next_wrap(READ_ONCE(tun->last_cpu), cpu_online_mask, -1, 1);
+    int cpu = cpumask_next_wrap(READ_ONCE(tun->tx_last_cpu), cpu_online_mask, -1, 1);
 
-    WRITE_ONCE(tun->last_cpu, cpu);
+    WRITE_ONCE(tun->tx_last_cpu, cpu);
 
     queue_work_on(cpu, tun->tx_wq, &per_cpu_ptr(tun->tx_workers, cpu)->work);
 
     return NETDEV_TX_OK;
-}
-
-static int npoll(struct napi_struct* napi, int budget)
-{
-    struct tun_struct* tun = container_of(napi, struct tun_struct, napi);
-    int work = 0;
-
-    while (work < budget && netif_running(tun->dev)) {
-        struct sk_buff* skb = skb_dequeue(&tun->rx_queue);
-        if (unlikely(!skb)) {
-            break;
-        }
-
-        if (unlikely(rx(tun, skb))) {
-            dev_kfree_skb_any(skb);
-        }
-
-        work++;
-    }
-
-    if (unlikely(work < budget)) {
-        napi_complete_done(napi, work);
-    }
-
-    return work;
 }
 
 static int tenrecv(struct sock* sk, struct sk_buff* skb)
@@ -229,15 +213,17 @@ static int tenrecv(struct sock* sk, struct sk_buff* skb)
         return 0;
     }
 
-    if (unlikely(skb_queue_len(&tun->rx_queue) >= RX_Q_LIMIT)) {
+    if (unlikely(ptr_ring_produce_bh(&tun->rx_ring, skb))) {
         tun->dev->stats.rx_dropped++;
         dev_kfree_skb_any(skb);
         return 0;
     }
 
-    skb_queue_tail(&tun->rx_queue, skb);
-    napi_schedule(&tun->napi);
+    int cpu = cpumask_next_wrap(READ_ONCE(tun->rx_last_cpu), cpu_online_mask, -1, 1);
 
+    WRITE_ONCE(tun->rx_last_cpu, cpu);
+
+    queue_work_on(cpu, tun->rx_wq, &per_cpu_ptr(tun->rx_workers, cpu)->work);
     return 0;
 }
 
@@ -333,37 +319,61 @@ static int __init minit(void)
         goto err_ips;
     }
 
-    err = ptr_ring_init(&tun->tx_ring, TX_RING_SIZE, GFP_KERNEL);
+    err = ptr_ring_init(&tun->tx_ring, RING_SIZE, GFP_KERNEL);
     if (err) {
         pr_err("tnet: ptr_ring_init failed: %d\n", err);
         goto err_cache;
     }
 
-    tun->tx_workers = alloc_percpu(struct tx_worker);
+    err = ptr_ring_init(&tun->rx_ring, RING_SIZE, GFP_KERNEL);
+    if (err) {
+        pr_err("tnet: ptr_ring_init failed: %d\n", err);
+        goto err_tx_ptr_ring;
+    }
+
+    tun->tx_workers = alloc_percpu(struct worker);
     if (!tun->tx_workers) {
         err = -ENOMEM;
         pr_err("tnet: alloc_percpu failed\n");
-        goto err_ptr_ring;
+        goto err_rx_ptr_ring;
+    }
+
+    tun->rx_workers = alloc_percpu(struct worker);
+    if (!tun->rx_workers) {
+        err = -ENOMEM;
+        pr_err("tnet: alloc_percpu failed\n");
+        goto err_tx_percpu;
     }
 
     tun->tx_wq = alloc_workqueue("tnet_tx", WQ_HIGHPRI, 0);
     if (!tun->tx_wq) {
         err = -ENOMEM;
         pr_err("tnet: alloc_workqueue failed\n");
-        goto err_percpu;
+        goto err_rx_percpu;
+    }
+
+    tun->rx_wq = alloc_workqueue("tnet_rx", WQ_HIGHPRI, 0);
+    if (!tun->rx_wq) {
+        err = -ENOMEM;
+        pr_err("tnet: alloc_workqueue failed\n");
+        goto err_tx_wq;
     }
 
     for_each_possible_cpu(cpu) {
-        struct tx_worker* txw = per_cpu_ptr(tun->tx_workers, cpu);
+        struct worker* txw = per_cpu_ptr(tun->tx_workers, cpu);
         txw->ptr = tun;
         INIT_WORK(&txw->work, tx);
     }
 
-    tun->last_cpu = cpumask_first(cpu_online_mask);
+    tun->tx_last_cpu = cpumask_first(cpu_online_mask);
 
-    skb_queue_head_init(&tun->rx_queue);
-    netif_napi_add(tdev, &tun->napi, npoll);
-    napi_enable(&tun->napi);
+    for_each_possible_cpu(cpu) {
+        struct worker* rxw = per_cpu_ptr(tun->rx_workers, cpu);
+        rxw->ptr = tun;
+        INIT_WORK(&rxw->work, rx);
+    }
+
+    tun->rx_last_cpu = cpumask_first(cpu_online_mask);
 
     struct udp_tunnel_sock_cfg sock_cfg = {
         .sk_user_data = tun,
@@ -376,20 +386,23 @@ static int __init minit(void)
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
-        goto err_wq;
+        goto err_rx_wq;
     }
 
     pr_info("tnet: module loaded\n");
     return 0;
 
-err_wq:
-    napi_disable(&tun->napi);
-    skb_queue_purge(&tun->rx_queue);
-    netif_napi_del(&tun->napi);
+err_rx_wq:
+    destroy_workqueue(tun->rx_wq);
+err_tx_wq:
     destroy_workqueue(tun->tx_wq);
-err_percpu:
+err_rx_percpu:
+    free_percpu(tun->rx_workers);
+err_tx_percpu:
     free_percpu(tun->tx_workers);
-err_ptr_ring:
+err_rx_ptr_ring:
+    ptr_ring_cleanup(&tun->rx_ring, (void(*)(void*))dev_kfree_skb_any);
+err_tx_ptr_ring:
     ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
 err_cache:
     dst_cache_destroy(&tun->dst_cache);
@@ -423,12 +436,13 @@ static void __exit mexit(void)
         synchronize_net();
     }
 
-    napi_disable(&tun->napi);
-    skb_queue_purge(&tun->rx_queue);
-    netif_napi_del(&tun->napi);
+    destroy_workqueue(tun->rx_wq);
 
     ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
     free_percpu(tun->tx_workers);
+
+    ptr_ring_cleanup(&tun->rx_ring, (void(*)(void*))dev_kfree_skb_any);
+    free_percpu(tun->rx_workers);
 
     dst_cache_destroy(&tun->dst_cache);
 

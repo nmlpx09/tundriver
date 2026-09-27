@@ -17,6 +17,11 @@
 
 #include <ips/types.h>
 
+struct worker {
+    void* ptr;
+    struct work_struct work;
+};
+
 struct tun_struct {
     struct net_device* dev;
 
@@ -26,16 +31,15 @@ struct tun_struct {
 
     struct dst_cache dst_cache;
 
-    struct napi_struct napi;
-    struct sk_buff_head rx_queue;
-
     struct ptr_ring tx_ring;
     struct workqueue_struct* tx_wq;
-    struct tx_worker {
-        void* ptr;
-        struct work_struct work;
-    } __percpu* tx_workers;
-    int last_cpu;
+    struct worker __percpu* tx_workers;
+    int tx_last_cpu;
+
+    struct ptr_ring rx_ring;
+    struct workqueue_struct* rx_wq;
+    struct worker __percpu* rx_workers;
+    int rx_last_cpu;
 
     __be32 tip;
     __be16 tport;
