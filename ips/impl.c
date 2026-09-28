@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * tnet - IPS table (hashtable, add/get)
+ * tnet - IPS table (rhashtable, add/get)
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
@@ -8,28 +8,43 @@
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/errno.h>
-#include <linux/hashtable.h>
+#include <linux/rhashtable.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <net/dst_cache.h>
 
 #include "impl.h"
 
-static __be32 get_key8(__be32 key) {
-    return key >> 24;
-}
+static const struct rhashtable_params ips_params = {
+    .key_len            = sizeof(__be32),
+    .key_offset         = offsetof(struct ips_entry, key),
+    .head_offset        = offsetof(struct ips_entry, node),
+    .automatic_shrinking = true,
+};
 
 struct ips_storage* ips_init(void)
 {
-    struct ips_storage* storage = kmalloc(sizeof(struct ips_storage), GFP_KERNEL);
+    struct ips_storage* storage = kmalloc(sizeof(*storage), GFP_KERNEL);
 
     if (!storage) {
         return ERR_PTR(-ENOMEM);
     }
 
-    hash_init(storage->table);
+    int err = rhashtable_init(&storage->ht, &ips_params);
+    if (err) {
+        kfree(storage);
+        return ERR_PTR(err);
+    }
 
     return storage;
+}
+
+static void ips_entry_free(void* ptr, void* arg)
+{
+    struct ips_entry* entry = ptr;
+
+    dst_cache_destroy(&entry->dst_cache);
+    kfree(entry);
 }
 
 void ips_close(struct ips_storage* storage)
@@ -38,74 +53,68 @@ void ips_close(struct ips_storage* storage)
         return;
     }
 
-    struct ips_entry* entry;
-    struct hlist_node* tmp;
-    int i;
-
-    hash_for_each_safe(storage->table, i, tmp, entry, node) {
-        hash_del(&entry->node);
-        dst_cache_destroy(&entry->dst_cache);
-        kfree(entry);
-    }
-
+    rhashtable_free_and_destroy(&storage->ht, ips_entry_free, NULL);
     kfree(storage);
 }
 
 struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
 {
-    if (unlikely(!storage)) {
-        return ERR_PTR(-EINVAL);
-    }
-
     struct ips_entry* entry;
 
-    __be32 key8 = get_key8(key);
-
-    hash_for_each_possible(storage->table, entry, node, (__force u32)key8) {
-        if (entry->key == key8) {
-            return entry;
-        }
+    if (unlikely(!storage)) {
+        return NULL;
     }
 
-    return NULL;
+    rcu_read_lock();
+    entry = rhashtable_lookup_fast(&storage->ht, &key, ips_params);
+    rcu_read_unlock();
+
+    return entry;
 }
 
 int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
 {
     struct ips_entry* entry;
+    int err;
 
     if (unlikely(!storage)) {
         return -EINVAL;
     }
 
-    entry = ips_get(storage, key);
-
-    if (likely(entry)) {
-        if (unlikely(entry->ip != ip || entry->port != port)) {
+    rcu_read_lock();
+    entry = rhashtable_lookup_fast(&storage->ht, &key, ips_params);
+    if (entry) {
+        if (READ_ONCE(entry->ip) != ip || READ_ONCE(entry->port) != port) {
             WRITE_ONCE(entry->ip, ip);
             WRITE_ONCE(entry->port, port);
             dst_cache_reset(&entry->dst_cache);
         }
+        rcu_read_unlock();
         return 0;
     }
+    rcu_read_unlock();
 
-    entry = kmalloc(sizeof(struct ips_entry), GFP_ATOMIC);
+    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
     if (!entry) {
         return -ENOMEM;
     }
 
-    int err = dst_cache_init(&entry->dst_cache, GFP_ATOMIC);
+    err = dst_cache_init(&entry->dst_cache, GFP_ATOMIC);
     if (err) {
         kfree(entry);
         return err;
     }
 
-    __be32 key8 = get_key8(key);
-
-    entry->key = key8;
-    entry->ip = ip;
+    entry->key  = key;
+    entry->ip   = ip;
     entry->port = port;
-    hash_add(storage->table, &entry->node, (__force u32)key8);
 
-    return 0;
+    err = rhashtable_lookup_insert_fast(&storage->ht, &entry->node, ips_params);
+    if (err == -EEXIST) {
+        dst_cache_destroy(&entry->dst_cache);
+        kfree(entry);
+        return 0;
+    }
+
+    return err;
 }

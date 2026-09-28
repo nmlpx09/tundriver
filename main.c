@@ -128,6 +128,7 @@ static void rx(struct work_struct* work)
 
             if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
                 dev->stats.rx_dropped++;
+                dev_kfree_skb_any(skb);
                 continue;
             }
 
@@ -136,6 +137,7 @@ static void rx(struct work_struct* work)
 
             if (unlikely(decrypt(skb))) {
                 dev->stats.rx_errors++;
+                dev_kfree_skb_any(skb);
                 continue;
             }
 
@@ -143,6 +145,7 @@ static void rx(struct work_struct* work)
 
             if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
                 dev->stats.rx_dropped++;
+                dev_kfree_skb_any(skb);
                 continue;
             }
 
@@ -151,12 +154,14 @@ static void rx(struct work_struct* work)
 
             if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
                 dev->stats.rx_errors++;
+                dev_kfree_skb_any(skb);
                 continue;
             }
         #endif
 
             if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
                 dev->stats.rx_errors++;
+                dev_kfree_skb_any(skb);
                 continue;
             }
 
@@ -178,7 +183,7 @@ static void rx(struct work_struct* work)
 
             dev_sw_netstats_rx_add(dev, skb->len);
 
-            netif_rx(skb);
+            netif_receive_skb(skb);
         }
         cond_resched();
     }

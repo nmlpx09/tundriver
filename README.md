@@ -1,6 +1,6 @@
 # tnet
 
-Linux kernel module that creates a virtual network interface encapsulating IPv4 packets over encrypted UDP tunnels.
+Linux kernel module that creates a virtual network interface encapsulating IPv4 packets over obfuscated UDP tunnels.
 
 ## Architecture
 
@@ -14,8 +14,8 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 └─────────────┘     └─────────────┘
 ```
 
-- **Client mode**: sends all encrypted traffic to a fixed `dest_ip:dest_port`
-- **Server mode**: dynamically maps client source IPs to their return addresses (IPS hashtable, 256 buckets; entries persist for module lifetime)
+- **Client mode**: sends all traffic to a fixed `dest_ip:dest_port`
+- **Server mode**: dynamically maps client inner IPv4 addresses to their return addresses (IPS rhashtable, RCU-protected lookup; entries persist for module lifetime)
 
 ### Data flow
 
@@ -23,14 +23,15 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 tx: ndo_start_xmit → skb_orphan → ptr_ring_produce_bh → queue_work_on(cpu)
          worker: ptr_ring_consume_batched_bh → strip eth → validate IPv4 → encrypt → resolve peer → UDP send
 
-rx: UDP recv (encap_rcv) → enqueue + NAPI schedule → poll: strip UDP header → decrypt → validate IPv4 → add eth header → napi_gro_receive
+rx: UDP recv (encap_rcv) → ptr_ring_produce_bh → queue_work_on(cpu)
+         worker: ptr_ring_consume_batched_bh → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
 ```
 
-Encryption is a per-byte substitution cipher (256-entry lookup table). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table.
+"Encryption" is a per-byte substitution cipher (256-entry lookup table) — this is **obfuscation, not cryptographically secure encryption**. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
 
-TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`TX_BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
+TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
-RX is NAPI-based: the UDP `encap_rcv` callback enqueues skbs into a per-device RX queue and schedules NAPI; the poll routine drains the queue (bounded by `RX_Q_LIMIT` / NAPI budget), decrypts, and pushes up via `napi_gro_receive`.
+RX is workqueue-based: the UDP `encap_rcv` callback enqueues skbs into a `ptr_ring` and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), decrypt, and push up via `netif_rx`.
 
 ## Build & Install
 
@@ -113,26 +114,25 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, encap_rcv, NAPI poll, async TX (ptr_ring + workqueue), rx paths
-types.h         tun_struct, tx_worker definitions
+main.c          Module init/exit, netdevice ops, encap_rcv, async TX/RX (ptr_ring + workqueue)
+types.h         tun_struct, worker definitions
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
 crypt/impl.c    Encrypt/decrypt (substitution cipher)
 crypt/impl.h
 crypt/table.h   256-byte encrypt/decrypt lookup tables
-ips/impl.c      IPS hashtable (add/get/close)
+ips/impl.c      IPS rhashtable (add/get/close, RCU lookup)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
 ```
 
 ## Configuration
 
-| Constant       | Value | Description                    |
-|----------------|-------|--------------------------------|
-| `MTU`          | 1472  | Device MTU (bytes)             |
-| `RX_Q_LIMIT`   | 1024  | RX NAPI queue depth (sk_buffs) |
-| `TX_RING_SIZE` | 1024  | TX ptr_ring depth (sk_buffs)  |
-| `TX_BATCH`     | 32    | TX consume batch size          |
+| Constant    | Value | Description                     |
+|-------------|-------|---------------------------------|
+| `MTU`       | 1472  | Device MTU (bytes)              |
+| `RING_SIZE` | 1024  | TX/RX ptr_ring depth (sk_buffs) |
+| `BATCH`     | 32    | TX/RX consume batch size        |
 
 ## WIP
 
