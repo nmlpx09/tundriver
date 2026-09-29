@@ -58,7 +58,7 @@ void ips_close(struct ips_storage* storage)
 }
 
 static __be32 get_key8(__be32 key32) {
-    return key32 & htonl(0xFF000000);
+    return key32 & htonl(0x000000FF);
 }
 
 struct ips_entry* ips_get(struct ips_storage* storage, __be32 key32)
