@@ -92,7 +92,7 @@ static void tx(struct work_struct* work)
                 continue;
             }
 
-            __le64 peer = READ_ONCE(entry->peer);
+            __be64 peer = READ_ONCE(entry->peer);
             __be32 tip = (__be32)peer;
             __be16 tport = (__be16)(peer >> 32);
             struct dst_cache* dc = &entry->dst_cache;

@@ -14,7 +14,7 @@
 
 struct ips_entry {
     __be32 key;
-    __le64 peer;
+    __be64 peer;
     struct rhash_head node;
     struct dst_cache dst_cache;
 };

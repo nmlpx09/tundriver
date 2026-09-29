@@ -58,7 +58,7 @@ void ips_close(struct ips_storage* storage)
 }
 
 static __be32 get_key8(__be32 key32) {
-    return key32 & 0xFF000000;
+    return key32 & htonl(0xFF000000);
 }
 
 struct ips_entry* ips_get(struct ips_storage* storage, __be32 key32)
@@ -78,6 +78,22 @@ struct ips_entry* ips_get(struct ips_storage* storage, __be32 key32)
     return entry;
 }
 
+static int ips_add_peer(struct ips_storage* storage, __be32 key8, __be64 peer)
+{
+    rcu_read_lock();
+    struct ips_entry* entry = rhashtable_lookup_fast(&storage->ht, &key8, ips_params);
+    if (entry) {
+        if (READ_ONCE(entry->peer) != peer) {
+            WRITE_ONCE(entry->peer, peer);
+            dst_cache_reset(&entry->dst_cache);
+        }
+        rcu_read_unlock();
+        return 0;
+    }
+    rcu_read_unlock();
+    return -ENOENT;
+}
+
 int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
 {
     struct ips_entry* entry;
@@ -88,26 +104,18 @@ int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
     }
 
     __be32 key8 = get_key8(key32);
-    __le64 peer = (__le64)port << 32 | (__le64)ip;
+    __be64 peer = (__be64)port << 32 | (__be64)ip;
 
-    rcu_read_lock();
-    entry = rhashtable_lookup_fast(&storage->ht, &key8, ips_params);
-    if (entry) {
-        if (READ_ONCE(entry->peer) != peer) {
-            WRITE_ONCE(entry->peer, peer);
-            dst_cache_reset(&entry->dst_cache);
-        }
-        rcu_read_unlock();
+    if (likely(!ips_add_peer(storage, key8, peer))) {
         return 0;
     }
-    rcu_read_unlock();
 
-    entry = kmalloc(sizeof(*entry), GFP_ATOMIC);
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
     if (!entry) {
         return -ENOMEM;
     }
 
-    err = dst_cache_init(&entry->dst_cache, GFP_ATOMIC);
+    err = dst_cache_init(&entry->dst_cache, GFP_KERNEL);
     if (err) {
         kfree(entry);
         return err;
@@ -120,7 +128,7 @@ int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
     if (err == -EEXIST) {
         dst_cache_destroy(&entry->dst_cache);
         kfree(entry);
-        return 0;
+        return ips_add_peer(storage, key8, peer);
     }
 
     return err;
