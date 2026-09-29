@@ -92,8 +92,9 @@ static void tx(struct work_struct* work)
                 continue;
             }
 
-            __be32 tip = READ_ONCE(entry->ip);
-            __be16 tport = READ_ONCE(entry->port);
+            __le64 peer = READ_ONCE(entry->peer);
+            __be32 tip = (__be32)peer;
+            __be16 tport = (__be16)(peer >> 32);
             struct dst_cache* dc = &entry->dst_cache;
         #else
             __be32 tip = READ_ONCE(tun->tip);
@@ -183,7 +184,7 @@ static void rx(struct work_struct* work)
 
             dev_sw_netstats_rx_add(dev, skb->len);
 
-            netif_receive_skb(skb);
+            netif_rx(skb);
         }
         cond_resched();
     }
@@ -262,9 +263,6 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
-    dev->features &= ~NETIF_F_IP_CSUM;
-    dev->features &= ~NETIF_F_TSO;
-    dev->features &= ~NETIF_F_GSO;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);

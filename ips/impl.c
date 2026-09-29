@@ -16,9 +16,9 @@
 #include "impl.h"
 
 static const struct rhashtable_params ips_params = {
-    .key_len            = sizeof(__be32),
-    .key_offset         = offsetof(struct ips_entry, key),
-    .head_offset        = offsetof(struct ips_entry, node),
+    .key_len             = sizeof(__be32),
+    .key_offset          = offsetof(struct ips_entry, key),
+    .head_offset         = offsetof(struct ips_entry, node),
     .automatic_shrinking = true,
 };
 
@@ -57,7 +57,11 @@ void ips_close(struct ips_storage* storage)
     kfree(storage);
 }
 
-struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
+static __be32 get_key8(__be32 key32) {
+    return key32 & 0xFF000000;
+}
+
+struct ips_entry* ips_get(struct ips_storage* storage, __be32 key32)
 {
     struct ips_entry* entry;
 
@@ -65,14 +69,16 @@ struct ips_entry* ips_get(struct ips_storage* storage, __be32 key)
         return NULL;
     }
 
+    __be32 key8 = get_key8(key32);
+
     rcu_read_lock();
-    entry = rhashtable_lookup_fast(&storage->ht, &key, ips_params);
+    entry = rhashtable_lookup_fast(&storage->ht, &key8, ips_params);
     rcu_read_unlock();
 
     return entry;
 }
 
-int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
+int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
 {
     struct ips_entry* entry;
     int err;
@@ -81,12 +87,14 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return -EINVAL;
     }
 
+    __be32 key8 = get_key8(key32);
+    __le64 peer = (__le64)port << 32 | (__le64)ip;
+
     rcu_read_lock();
-    entry = rhashtable_lookup_fast(&storage->ht, &key, ips_params);
+    entry = rhashtable_lookup_fast(&storage->ht, &key8, ips_params);
     if (entry) {
-        if (READ_ONCE(entry->ip) != ip || READ_ONCE(entry->port) != port) {
-            WRITE_ONCE(entry->ip, ip);
-            WRITE_ONCE(entry->port, port);
+        if (READ_ONCE(entry->peer) != peer) {
+            WRITE_ONCE(entry->peer, peer);
             dst_cache_reset(&entry->dst_cache);
         }
         rcu_read_unlock();
@@ -105,9 +113,8 @@ int ips_add(struct ips_storage* storage, __be32 key, __be32 ip, __be16 port)
         return err;
     }
 
-    entry->key  = key;
-    entry->ip   = ip;
-    entry->port = port;
+    entry->key = key8;
+    entry->peer = peer;
 
     err = rhashtable_lookup_insert_fast(&storage->ht, &entry->node, ips_params);
     if (err == -EEXIST) {
