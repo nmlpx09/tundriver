@@ -22,10 +22,16 @@ static int crypt_skb(struct sk_buff* skb, const u8* table)
     u8* data = skb->data;
     size_t len = skb_headlen(skb), i;
 
-    for (i = 0; i < len; i++) {
+    for (i = 0; i < len - 3; i += 4) {
         data[i] = table[data[i]];
+        data[i + 1] = table[data[i + 1]];
+        data[i + 2] = table[data[i + 2]];
+        data[i + 3] = table[data[i + 3]];
     }
 
+    for (; i < len; i++) {
+        data[i] = table[data[i]];
+    }
     return 0;
 }
 
