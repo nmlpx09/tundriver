@@ -30,7 +30,7 @@
 
 #define DEV_NAME "tnet%d"
 #define MTU 1472
-#define RING_SIZE 1024
+#define RING_SIZE 4096
 #define BATCH 32
 
 static char* dest_ip = "0.0.0.0";
@@ -124,6 +124,8 @@ static void rx(struct work_struct* work)
     int n, i;
 
     while ((n = ptr_ring_consume_batched_bh(&tun->rx.ring, (void**)batch, BATCH)) > 0) {
+        LIST_HEAD(list);
+
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
@@ -184,8 +186,12 @@ static void rx(struct work_struct* work)
 
             dev_sw_netstats_rx_add(dev, skb->len);
 
-            netif_rx(skb);
+            list_add_tail(&skb->list, &list);
         }
+
+        local_bh_disable();
+        netif_receive_skb_list(&list);
+        local_bh_enable();
         cond_resched();
     }
 }

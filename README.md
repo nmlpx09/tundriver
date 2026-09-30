@@ -131,7 +131,7 @@ ips/types.h     ips_entry, ips_storage types
 | Constant    | Value | Description                     |
 |-------------|-------|---------------------------------|
 | `MTU`       | 1472  | Device MTU (bytes)              |
-| `RING_SIZE` | 1024  | TX/RX ptr_ring depth (sk_buffs) |
+| `RING_SIZE` | 4096  | TX/RX ptr_ring depth (sk_buffs) |
 | `BATCH`     | 32    | TX/RX consume batch size        |
 
 ## WIP
