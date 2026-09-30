@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * tnet - tun_struct definition
+ * tnet - tun_ctx definition
  *
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
@@ -22,7 +22,14 @@ struct worker {
     struct work_struct work;
 };
 
-struct tun_struct {
+struct work_ctx {
+    struct ptr_ring ring;
+    struct workqueue_struct* wq;
+    struct worker __percpu* workers;
+    int last_cpu;
+};
+
+struct tun_ctx {
     struct net_device* dev;
 
     struct socket* sock;
@@ -31,15 +38,8 @@ struct tun_struct {
 
     struct dst_cache dst_cache;
 
-    struct ptr_ring tx_ring;
-    struct workqueue_struct* tx_wq;
-    struct worker __percpu* tx_workers;
-    int tx_last_cpu;
-
-    struct ptr_ring rx_ring;
-    struct workqueue_struct* rx_wq;
-    struct worker __percpu* rx_workers;
-    int rx_last_cpu;
+    struct work_ctx tx;
+    struct work_ctx rx;
 
     __be32 tip;
     __be16 tport;

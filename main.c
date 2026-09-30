@@ -49,13 +49,13 @@ static struct net_device* tdev;
 static void tx(struct work_struct* work)
 {
     struct worker* txw = container_of(work, struct worker, work);
-    struct tun_struct* tun = txw->ptr;
+    struct tun_ctx* tun = txw->ptr;
     struct net_device* dev = tun->dev;
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
     int n, i;
 
-    while ((n = ptr_ring_consume_batched_bh(&tun->tx_ring, (void**)batch, BATCH)) > 0) {
+    while ((n = ptr_ring_consume_batched_bh(&tun->tx.ring, (void**)batch, BATCH)) > 0) {
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
@@ -117,13 +117,13 @@ static void tx(struct work_struct* work)
 static void rx(struct work_struct* work)
 {
     struct worker* rxw = container_of(work, struct worker, work);
-    struct tun_struct* tun = rxw->ptr;
+    struct tun_ctx* tun = rxw->ptr;
     struct net_device* dev = tun->dev;
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
     int n, i;
 
-    while ((n = ptr_ring_consume_batched_bh(&tun->rx_ring, (void**)batch, BATCH)) > 0) {
+    while ((n = ptr_ring_consume_batched_bh(&tun->rx.ring, (void**)batch, BATCH)) > 0) {
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
@@ -192,44 +192,44 @@ static void rx(struct work_struct* work)
 
 static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 {
-    struct tun_struct* tun = netdev_priv(dev);
+    struct tun_ctx* tun = netdev_priv(dev);
 
     skb_orphan(skb);
-    if (unlikely(ptr_ring_produce_bh(&tun->tx_ring, skb))) {
+    if (unlikely(ptr_ring_produce_bh(&tun->tx.ring, skb))) {
         dev->stats.tx_dropped++;
         dev_kfree_skb_any(skb);
         return NETDEV_TX_OK;
     }
 
-    int cpu = cpumask_next_wrap(READ_ONCE(tun->tx_last_cpu), cpu_online_mask, -1, 1);
+    int cpu = cpumask_next_wrap(READ_ONCE(tun->tx.last_cpu), cpu_online_mask, -1, 1);
 
-    WRITE_ONCE(tun->tx_last_cpu, cpu);
+    WRITE_ONCE(tun->tx.last_cpu, cpu);
 
-    queue_work_on(cpu, tun->tx_wq, &per_cpu_ptr(tun->tx_workers, cpu)->work);
+    queue_work_on(cpu, tun->tx.wq, &per_cpu_ptr(tun->tx.workers, cpu)->work);
 
     return NETDEV_TX_OK;
 }
 
 static int tenrecv(struct sock* sk, struct sk_buff* skb)
 {
-    struct tun_struct* tun = READ_ONCE(sk->sk_user_data);
+    struct tun_ctx* tun = READ_ONCE(sk->sk_user_data);
 
     if (unlikely(!tun || !netif_running(tun->dev))) {
         dev_kfree_skb_any(skb);
         return 0;
     }
 
-    if (unlikely(ptr_ring_produce_bh(&tun->rx_ring, skb))) {
+    if (unlikely(ptr_ring_produce_bh(&tun->rx.ring, skb))) {
         tun->dev->stats.rx_dropped++;
         dev_kfree_skb_any(skb);
         return 0;
     }
 
-    int cpu = cpumask_next_wrap(READ_ONCE(tun->rx_last_cpu), cpu_online_mask, -1, 1);
+    int cpu = cpumask_next_wrap(READ_ONCE(tun->rx.last_cpu), cpu_online_mask, -1, 1);
 
-    WRITE_ONCE(tun->rx_last_cpu, cpu);
+    WRITE_ONCE(tun->rx.last_cpu, cpu);
 
-    queue_work_on(cpu, tun->rx_wq, &per_cpu_ptr(tun->rx_workers, cpu)->work);
+    queue_work_on(cpu, tun->rx.wq, &per_cpu_ptr(tun->rx.workers, cpu)->work);
     return 0;
 }
 
@@ -270,10 +270,56 @@ static void dsetup(struct net_device* dev)
     eth_hw_addr_random(dev);
 }
 
+static int work_ctx_init(struct work_ctx* ctx, const char* wq_name,
+                         unsigned int ring_size,
+                         void (*fn)(struct work_struct*),
+                         struct tun_ctx* tun)
+{
+    int err, cpu;
+
+    err = ptr_ring_init(&ctx->ring, ring_size, GFP_KERNEL);
+    if (err)
+        return err;
+
+    ctx->workers = alloc_percpu(struct worker);
+    if (!ctx->workers) {
+        err = -ENOMEM;
+        goto err_ring;
+    }
+
+    ctx->wq = alloc_workqueue(wq_name, WQ_HIGHPRI, 0);
+    if (!ctx->wq) {
+        err = -ENOMEM;
+        goto err_percpu;
+    }
+
+    for_each_possible_cpu(cpu) {
+        struct worker* w = per_cpu_ptr(ctx->workers, cpu);
+        w->ptr = tun;
+        INIT_WORK(&w->work, fn);
+    }
+
+    ctx->last_cpu = cpumask_first(cpu_online_mask);
+    return 0;
+
+err_percpu:
+    free_percpu(ctx->workers);
+err_ring:
+    ptr_ring_cleanup(&ctx->ring, (void(*)(void*))dev_kfree_skb_any);
+    return err;
+}
+
+static void work_ctx_destroy(struct work_ctx* ctx)
+{
+    destroy_workqueue(ctx->wq);
+    ptr_ring_cleanup(&ctx->ring, (void(*)(void*))dev_kfree_skb_any);
+    free_percpu(ctx->workers);
+}
+
 static int __init minit(void)
 {
     __be32 tip;
-    int err, cpu;
+    int err;
 
     if (!in4_pton(dest_ip, -1, (u8*)&tip, -1, NULL)) {
         pr_err("tnet: invalid dest_ip: %s\n", dest_ip);
@@ -290,13 +336,13 @@ static int __init minit(void)
         return -EINVAL;
     }
 
-    tdev = alloc_netdev(sizeof(struct tun_struct), DEV_NAME, NET_NAME_UNKNOWN, dsetup);
+    tdev = alloc_netdev(sizeof(struct tun_ctx), DEV_NAME, NET_NAME_UNKNOWN, dsetup);
     if (!tdev) {
         pr_err("tnet: failed to allocate net device\n");
         return -ENOMEM;
     }
 
-    struct tun_struct* tun = netdev_priv(tdev);
+    struct tun_ctx* tun = netdev_priv(tdev);
 
     tun->dev = tdev;
     tun->tip = tip;
@@ -322,61 +368,17 @@ static int __init minit(void)
         goto err_ips;
     }
 
-    err = ptr_ring_init(&tun->tx_ring, RING_SIZE, GFP_KERNEL);
+    err = work_ctx_init(&tun->tx, "tnet_tx", RING_SIZE, tx, tun);
     if (err) {
-        pr_err("tnet: ptr_ring_init failed: %d\n", err);
+        pr_err("tnet: tx work ctx init failed: %d\n", err);
         goto err_cache;
     }
 
-    err = ptr_ring_init(&tun->rx_ring, RING_SIZE, GFP_KERNEL);
+    err = work_ctx_init(&tun->rx, "tnet_rx", RING_SIZE, rx, tun);
     if (err) {
-        pr_err("tnet: ptr_ring_init failed: %d\n", err);
-        goto err_tx_ptr_ring;
+        pr_err("tnet: rx work ctx init failed: %d\n", err);
+        goto err_tx_ctx;
     }
-
-    tun->tx_workers = alloc_percpu(struct worker);
-    if (!tun->tx_workers) {
-        err = -ENOMEM;
-        pr_err("tnet: alloc_percpu failed\n");
-        goto err_rx_ptr_ring;
-    }
-
-    tun->rx_workers = alloc_percpu(struct worker);
-    if (!tun->rx_workers) {
-        err = -ENOMEM;
-        pr_err("tnet: alloc_percpu failed\n");
-        goto err_tx_percpu;
-    }
-
-    tun->tx_wq = alloc_workqueue("tnet_tx", WQ_HIGHPRI, 0);
-    if (!tun->tx_wq) {
-        err = -ENOMEM;
-        pr_err("tnet: alloc_workqueue failed\n");
-        goto err_rx_percpu;
-    }
-
-    tun->rx_wq = alloc_workqueue("tnet_rx", WQ_HIGHPRI, 0);
-    if (!tun->rx_wq) {
-        err = -ENOMEM;
-        pr_err("tnet: alloc_workqueue failed\n");
-        goto err_tx_wq;
-    }
-
-    for_each_possible_cpu(cpu) {
-        struct worker* txw = per_cpu_ptr(tun->tx_workers, cpu);
-        txw->ptr = tun;
-        INIT_WORK(&txw->work, tx);
-    }
-
-    tun->tx_last_cpu = cpumask_first(cpu_online_mask);
-
-    for_each_possible_cpu(cpu) {
-        struct worker* rxw = per_cpu_ptr(tun->rx_workers, cpu);
-        rxw->ptr = tun;
-        INIT_WORK(&rxw->work, rx);
-    }
-
-    tun->rx_last_cpu = cpumask_first(cpu_online_mask);
 
     struct udp_tunnel_sock_cfg sock_cfg = {
         .sk_user_data = tun,
@@ -389,24 +391,16 @@ static int __init minit(void)
     err = register_netdev(tdev);
     if (err) {
         pr_err("tnet: failed to register net device: %d\n", err);
-        goto err_rx_wq;
+        goto err_rx_ctx;
     }
 
     pr_info("tnet: module loaded\n");
     return 0;
 
-err_rx_wq:
-    destroy_workqueue(tun->rx_wq);
-err_tx_wq:
-    destroy_workqueue(tun->tx_wq);
-err_rx_percpu:
-    free_percpu(tun->rx_workers);
-err_tx_percpu:
-    free_percpu(tun->tx_workers);
-err_rx_ptr_ring:
-    ptr_ring_cleanup(&tun->rx_ring, (void(*)(void*))dev_kfree_skb_any);
-err_tx_ptr_ring:
-    ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
+err_rx_ctx:
+    work_ctx_destroy(&tun->rx);
+err_tx_ctx:
+    work_ctx_destroy(&tun->tx);
 err_cache:
     dst_cache_destroy(&tun->dst_cache);
 err_ips:
@@ -424,11 +418,11 @@ static void __exit mexit(void)
         return;
     }
 
-    struct tun_struct* tun = netdev_priv(tdev);
+    struct tun_ctx* tun = netdev_priv(tdev);
 
     unregister_netdev(tdev);
 
-    destroy_workqueue(tun->tx_wq);
+    work_ctx_destroy(&tun->tx);
 
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
@@ -439,13 +433,7 @@ static void __exit mexit(void)
         synchronize_net();
     }
 
-    destroy_workqueue(tun->rx_wq);
-
-    ptr_ring_cleanup(&tun->tx_ring, (void(*)(void*))dev_kfree_skb_any);
-    free_percpu(tun->tx_workers);
-
-    ptr_ring_cleanup(&tun->rx_ring, (void(*)(void*))dev_kfree_skb_any);
-    free_percpu(tun->rx_workers);
+    work_ctx_destroy(&tun->rx);
 
     dst_cache_destroy(&tun->dst_cache);
 
