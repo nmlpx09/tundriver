@@ -26,7 +26,7 @@ add_rules() {
     ip address add $TUN_IP/24 dev $TUN_DEVICE
     ip link set $TUN_DEVICE up
 
-    ip route add $DEST_IP `ip route | grep '^default' | cut -d ' ' -f 2-`
+    ip route add $DEST_IP via $(ip route show default | awk '/default/ {print $3; exit}')
     ip route add 128.0.0.0/1 dev $TUN_DEVICE
     ip route add 0.0.0.0/1 dev $TUN_DEVICE
 }
@@ -72,6 +72,6 @@ case "${1:-}" in
         remove_rules || :
         ;;
     *)
-        echo "Usage: $0 {c|d}"
+        echo "usage: $0 {c|d}"
         ;;
 esac

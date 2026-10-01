@@ -103,7 +103,6 @@ After `make install_service`:
 systemctl daemon-reload    # reload systemd
 systemctl start tunnel     # tun c
 systemctl stop tunnel      # tun d
-systemctl reload tunnel    # tun r
 systemctl enable tunnel    # autostart on boot
 ```
 

@@ -5,7 +5,7 @@ set -exu -o pipefail
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.1
 
-OUT_DEVICE=`ip route get 1.1.1.1 | head -1 | cut -d ' ' -f 5`
+OUT_DEVICE=$(ip -o route get 1.1.1.1 | awk '{for(i=0; i<=NF; i++) if($i=="dev") print $(i+1)}')
 SRC_PORT=69
 
 MODULE=tnet
@@ -28,11 +28,11 @@ add_rules() {
 
     sysctl net.ipv4.ip_forward=1
 
-    iptables -t nat -A POSTROUTING -s $TUN_IP/24 -o $OUT_DEVICE -j MASQUERADE
+    iptables -w -t nat -A POSTROUTING -s $TUN_IP/24 -o $OUT_DEVICE -j MASQUERADE
 }
 
 remove_rules() {
-    iptables -t nat -D POSTROUTING -s $TUN_IP/24 -o $OUT_DEVICE -j MASQUERADE
+    iptables -w -t nat -D POSTROUTING -s $TUN_IP/24 -o $OUT_DEVICE -j MASQUERADE
 }
 
 check_vars() {
@@ -67,20 +67,9 @@ case "${1:-}" in
 
         modprobe -r $MODULE
 
-        remove_rules
-        ;;
-
-    "r")
-        ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
-
-        modprobe -r $MODULE
-        remove_rules
-
-        modprobe $MODULE src_port=$SRC_PORT
-        add_rules
-
+        remove_rules || :
         ;;
     *)
-        echo "Usage: $0 {c|d|r}"
+        echo "usage: $0 {c|d|r}"
         ;;
 esac

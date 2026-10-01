@@ -8,7 +8,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/bin/tun c
 ExecStop=/usr/bin/tun d
-ExecReload=/usr/bin/tun r
+ExecReload=
 Restart=on-failure
 RestartSec=5
 
