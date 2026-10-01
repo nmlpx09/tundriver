@@ -92,7 +92,6 @@ sudo tun d   # disconnect
 ```bash
 sudo tun c   # connect
 sudo tun d   # disconnect
-sudo tun r   # restart tunnel (reload module)
 ```
 
 ### systemd (server)
