@@ -2,7 +2,7 @@
 
 set -exu -o pipefail
 
-DEST_IP=66.248.207.187
+DEST_IP=
 DEST_PORT=69
 
 TUN_DEVICE=tnet0
