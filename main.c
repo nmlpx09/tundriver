@@ -51,8 +51,11 @@ static void tx(struct work_struct* work)
     struct worker* txw = container_of(work, struct worker, work);
     struct tun_ctx* tun = txw->ptr;
     struct net_device* dev = tun->dev;
+    struct socket* sock = READ_ONCE(tun->sock);
+    __maybe_unused struct ips_storage* ips = READ_ONCE(tun->ips);
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
+
     int n, i;
 
     while ((n = ptr_ring_consume_batched_bh(&tun->tx.ring, (void**)batch, BATCH)) > 0) {
@@ -82,8 +85,6 @@ static void tx(struct work_struct* work)
             }
 
         #ifdef SERVER
-            struct ips_storage* ips = READ_ONCE(tun->ips);
-
             struct ips_entry* entry = ips_get(ips, daddr);
 
             if (unlikely(IS_ERR_OR_NULL(entry))) {
@@ -102,8 +103,6 @@ static void tx(struct work_struct* work)
             struct dst_cache* dc = &tun->dst_cache;
         #endif
 
-            struct socket* sock = READ_ONCE(tun->sock);
-
             if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
@@ -119,6 +118,7 @@ static void rx(struct work_struct* work)
     struct worker* rxw = container_of(work, struct worker, work);
     struct tun_ctx* tun = rxw->ptr;
     struct net_device* dev = tun->dev;
+    __maybe_unused struct ips_storage* ips = READ_ONCE(tun->ips);
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
     int n, i;
@@ -153,15 +153,12 @@ static void rx(struct work_struct* work)
             }
 
         #ifdef SERVER
-            struct ips_storage* ips = READ_ONCE(tun->ips);
-
             if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
                 dev->stats.rx_errors++;
                 dev_kfree_skb_any(skb);
                 continue;
             }
         #endif
-
             if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
                 dev->stats.rx_errors++;
                 dev_kfree_skb_any(skb);
