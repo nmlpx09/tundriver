@@ -133,22 +133,22 @@ static void rx(struct work_struct* work)
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
+            __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
+            __maybe_unused __be16 tport = udp_hdr(skb)->source;
+
             if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
                 dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
 
-            __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
-            __maybe_unused __be16 tport = udp_hdr(skb)->source;
+            skb_reset_network_header(skb);
 
             if (unlikely(decrypt(skb))) {
                 dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
-
-            skb_reset_network_header(skb);
 
             if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
                 dev_dstats_rx_dropped(dev);
