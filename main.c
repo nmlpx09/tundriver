@@ -103,6 +103,10 @@ static void tx(struct work_struct* work)
             struct dst_cache* dc = &tun->dst_cache;
         #endif
 
+            skb->mark = 0;
+            skb->priority = 0;
+            skb->encapsulation = 0;
+
             if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
                 dev->stats.tx_errors++;
                 dev_kfree_skb_any(skb);
