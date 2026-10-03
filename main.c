@@ -63,7 +63,7 @@ static void tx(struct work_struct* work)
             skb = batch[i];
 
             if (unlikely(!skb_pull(skb, ETH_HLEN))) {
-                dev->stats.tx_dropped++;
+                dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -71,7 +71,7 @@ static void tx(struct work_struct* work)
             skb_reset_network_header(skb);
 
             if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
-                dev->stats.tx_dropped++;
+                dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -79,7 +79,7 @@ static void tx(struct work_struct* work)
             __maybe_unused __be32 daddr = ip_hdr(skb)->daddr;
 
             if (unlikely(encrypt(skb))) {
-                dev->stats.tx_errors++;
+                dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -88,7 +88,7 @@ static void tx(struct work_struct* work)
             struct ips_entry* entry = ips_get(ips, daddr);
 
             if (unlikely(IS_ERR_OR_NULL(entry))) {
-                dev->stats.tx_errors++;
+                dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -108,7 +108,7 @@ static void tx(struct work_struct* work)
             skb->encapsulation = 0;
 
             if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
-                dev->stats.tx_errors++;
+                dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -134,7 +134,7 @@ static void rx(struct work_struct* work)
             skb = batch[i];
 
             if (unlikely(!skb_pull(skb, sizeof(struct udphdr)))) {
-                dev->stats.rx_dropped++;
+                dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -143,7 +143,7 @@ static void rx(struct work_struct* work)
             __maybe_unused __be16 tport = udp_hdr(skb)->source;
 
             if (unlikely(decrypt(skb))) {
-                dev->stats.rx_errors++;
+                dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -151,20 +151,20 @@ static void rx(struct work_struct* work)
             skb_reset_network_header(skb);
 
             if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
-                dev->stats.rx_dropped++;
+                dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
 
         #ifdef SERVER
             if (unlikely(ips_add(ips, ip_hdr(skb)->saddr, tip, tport))) {
-                dev->stats.rx_errors++;
+                dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
         #endif
             if (unlikely(skb_headroom(skb) < ETH_HLEN)) {
-                dev->stats.rx_errors++;
+                dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
@@ -185,7 +185,7 @@ static void rx(struct work_struct* work)
             skb->protocol = eth_type_trans(skb, dev);
             skb->ip_summed = CHECKSUM_UNNECESSARY;
 
-            dev_sw_netstats_rx_add(dev, skb->len);
+            dev_dstats_rx_add(dev, skb->len);
 
             list_add_tail(&skb->list, &list);
         }
@@ -203,7 +203,7 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 
     skb_orphan(skb);
     if (unlikely(ptr_ring_produce_bh(&tun->tx.ring, skb))) {
-        dev->stats.tx_dropped++;
+        dev_dstats_tx_dropped(dev);
         dev_kfree_skb_any(skb);
         return NETDEV_TX_OK;
     }
@@ -227,7 +227,7 @@ static int tenrecv(struct sock* sk, struct sk_buff* skb)
     }
 
     if (unlikely(ptr_ring_produce_bh(&tun->rx.ring, skb))) {
-        tun->dev->stats.rx_dropped++;
+        dev_dstats_rx_dropped(tun->dev);
         dev_kfree_skb_any(skb);
         return 0;
     }
@@ -270,7 +270,7 @@ static void dsetup(struct net_device* dev)
     dev->netdev_ops = &ops;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
-    dev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
+    dev->pcpu_stat_type = NETDEV_PCPU_STAT_DSTATS;
     dev->mtu = MTU;
     dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
 
