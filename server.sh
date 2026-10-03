@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -exu -o pipefail
+set -exu
 
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.1
@@ -23,16 +23,17 @@ check_interface() {
 }
 
 add_rules() {
-    ip address add "$TUN_IP"/24 dev "$TUN_DEVICE"
-    ip link set "$TUN_DEVICE" up
+    ip address add "$TUN_IP"/24 dev "$TUN_DEVICE" || return 1
+    ip link set "$TUN_DEVICE" up  || return 1
 
-    sysctl net.ipv4.ip_forward=1
+    sysctl net.ipv4.ip_forward=1  || return 1
 
-    iptables -w -t nat -A POSTROUTING -s "$TUN_IP"/24 -o "$OUT_DEVICE" -j MASQUERADE
+    iptables -w -t nat -A POSTROUTING -s "$TUN_IP"/24 -o "$OUT_DEVICE" -j MASQUERADE  || return 1
+    return 0
 }
 
 remove_rules() {
-    iptables -w -t nat -D POSTROUTING -s "$TUN_IP"/24 -o "$OUT_DEVICE" -j MASQUERADE
+    iptables -w -t nat -D POSTROUTING -s "$TUN_IP"/24 -o "$OUT_DEVICE" -j MASQUERADE || :
 }
 
 check_vars() {
@@ -59,15 +60,19 @@ case "${1:-}" in
 
         modprobe "$MODULE" src_port="$SRC_PORT"
 
-        add_rules
+        if ! add_rules; then
+            echo "unsuccess add_rules"
+            remove_rules
+            modprobe -r "$MODULE"
+            exit 1
+        fi
         ;;
 
     "d")
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
+        remove_rules
         modprobe -r "$MODULE"
-
-        remove_rules || :
         ;;
     *)
         echo "usage: $0 {c|d}"

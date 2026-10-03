@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -exu -o pipefail
+set -exu
 
 DEST_IP=
 DEST_PORT=69
@@ -23,18 +23,19 @@ check_interface() {
 }
 
 add_rules() {
-    ip address add "$TUN_IP"/24 dev "$TUN_DEVICE"
-    ip link set "$TUN_DEVICE" up
+    ip address add "$TUN_IP"/24 dev "$TUN_DEVICE" || return 1
+    ip link set "$TUN_DEVICE" up || return 1
 
-    ip route add "$DEST_IP" via "$(ip route show default | awk '{print $3; exit}')"
-    ip route add 128.0.0.0/1 dev "$TUN_DEVICE"
-    ip route add 0.0.0.0/1 dev "$TUN_DEVICE"
+    ip route add "$DEST_IP" via "$(ip route show default | awk '{print $3; exit}')" || return 1
+    ip route add 128.0.0.0/1 dev "$TUN_DEVICE" || return 1
+    ip route add 0.0.0.0/1 dev "$TUN_DEVICE" || return 1
+    return 0
 }
 
 remove_rules() {
-    ip route del 128.0.0.0/1 dev "$TUN_DEVICE"
-    ip route del 0.0.0.0/1 dev "$TUN_DEVICE"
-    ip route del "$DEST_IP"
+    ip route del 128.0.0.0/1 dev "$TUN_DEVICE" || :
+    ip route del 0.0.0.0/1 dev "$TUN_DEVICE" || :
+    ip route del "$DEST_IP" || :
 }
 
 check_vars() {
@@ -61,15 +62,19 @@ case "${1:-}" in
 
         modprobe "$MODULE" dest_ip="$DEST_IP" dest_port="$DEST_PORT"
 
-        add_rules
+        if ! add_rules; then
+            echo "unsuccess add_rules"
+            remove_rules
+            modprobe -r "$MODULE"
+            exit 1
+        fi
         ;;
 
     "d")
         ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
 
+        remove_rules
         modprobe -r "$MODULE"
-
-        remove_rules || :
         ;;
     *)
         echo "usage: $0 {c|d}"

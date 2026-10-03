@@ -125,9 +125,11 @@ int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
     entry->peer = peer;
 
     err = rhashtable_lookup_insert_fast(&storage->ht, &entry->node, ips_params);
-    if (err == -EEXIST) {
+    if (err) {
         dst_cache_destroy(&entry->dst_cache);
         kfree(entry);
+    }
+    if (err == -EEXIST) {
         return ips_add_peer(storage, key8, peer);
     }
 
