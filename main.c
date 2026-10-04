@@ -59,6 +59,10 @@ static void tx(struct work_struct* work)
     int n, i;
 
     while ((n = ptr_ring_consume_batched_bh(&tun->tx.ring, (void**)batch, BATCH)) > 0) {
+        if (netif_queue_stopped(dev)) {
+            netif_wake_queue(dev);
+        }
+
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
@@ -203,9 +207,13 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 
     skb_orphan(skb);
     if (unlikely(ptr_ring_produce_bh(&tun->tx.ring, skb))) {
-        dev_dstats_tx_dropped(dev);
-        dev_kfree_skb_any(skb);
-        return NETDEV_TX_OK;
+        netif_stop_queue(dev);
+        smp_mb();
+        if (unlikely(!ptr_ring_full(&tun->tx.ring) && !ptr_ring_produce_bh(&tun->tx.ring, skb))) {
+            netif_wake_queue(dev);
+        } else {
+            return NETDEV_TX_BUSY;
+        }
     }
 
     int cpu = cpumask_next_wrap(READ_ONCE(tun->tx.last_cpu), cpu_online_mask, -1, 1);

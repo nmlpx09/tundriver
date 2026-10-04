@@ -60,7 +60,6 @@ int sock_send(struct socket* sock, struct sk_buff* skb,
     }
 
     struct sock* sk = sock->sk;
-    struct rtable* rt;
     __be32 saddr;
 
     int err = skb_cow_head(skb,
@@ -70,7 +69,7 @@ int sock_send(struct socket* sock, struct sk_buff* skb,
     }
 
     local_bh_disable();
-    rt = dst_cache_get_ip4(dc, &saddr);
+    struct rtable* rt = dst_cache_get_ip4(dc, &saddr);
     if (unlikely(!rt)) {
         struct flowi4 fl = {
             .flowi4_proto = IPPROTO_UDP,
