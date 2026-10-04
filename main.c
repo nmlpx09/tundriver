@@ -110,11 +110,15 @@ static void tx(struct work_struct* work)
             skb->priority = 0;
             skb->encapsulation = 0;
 
+            unsigned int len = skb->len;
+
             if (unlikely(sock_send(sock, skb, dc, tip, tport))) {
                 dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
+
+            dev_dstats_tx_add(dev, len);
         }
         cond_resched();
     }
@@ -210,6 +214,7 @@ static netdev_tx_t dsxmit(struct sk_buff* skb, struct net_device* dev)
 {
     struct tun_ctx* tun = netdev_priv(dev);
 
+    skb_tx_timestamp(skb);
     skb_orphan(skb);
     if (unlikely(ptr_ring_produce_bh(&tun->tx.ring, skb))) {
         netif_stop_queue(dev);

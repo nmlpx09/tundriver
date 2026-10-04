@@ -52,6 +52,7 @@ void ips_close(struct ips_storage* storage)
     kfree(storage);
 }
 
+/* Key is the last octet of the IPv4 address — supports up to 256 peers (e.g. /24 subnet) */
 static __be32 get_key8(__be32 key32) {
     return key32 & htonl(0x000000FF);
 }
