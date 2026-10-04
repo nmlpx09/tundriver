@@ -137,6 +137,12 @@ static void rx(struct work_struct* work)
         for (i = 0; i < n; i++) {
             skb = batch[i];
 
+            if (unlikely(skb->len < sizeof(struct iphdr) + sizeof(struct udphdr))) {
+                dev_dstats_rx_dropped(dev);
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
             __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
             __maybe_unused __be16 tport = udp_hdr(skb)->source;
 
@@ -280,7 +286,7 @@ static void dsetup(struct net_device* dev)
     dev->flags &= ~IFF_MULTICAST;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_DSTATS;
     dev->mtu = MTU;
-    dev->needed_headroom = ETH_HLEN + sizeof(struct iphdr) + sizeof(struct udphdr);
+    dev->needed_headroom = sizeof(struct iphdr) + sizeof(struct udphdr);
 
     eth_hw_addr_random(dev);
 }
