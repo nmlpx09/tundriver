@@ -163,7 +163,7 @@ static void rx(struct work_struct* work)
                 continue;
             }
 
-            if (unlikely(skb->len < sizeof(struct iphdr) || ip_hdr(skb)->version != 4)) {
+            if (unlikely(ip_hdr(skb)->version != 4)) {
                 dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
@@ -286,6 +286,7 @@ static void dsetup(struct net_device* dev)
     ether_setup(dev);
 
     dev->netdev_ops = &ops;
+    dev->lltx = 1;
     dev->flags |= IFF_NOARP;
     dev->flags &= ~IFF_MULTICAST;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_DSTATS;
@@ -312,7 +313,7 @@ static int work_ctx_init(struct work_ctx* ctx, const char* wq_name,
         goto err_ring;
     }
 
-    ctx->wq = alloc_workqueue(wq_name, WQ_HIGHPRI, 0);
+    ctx->wq = alloc_workqueue(wq_name, 0, 0);
     if (!ctx->wq) {
         err = -ENOMEM;
         goto err_percpu;
