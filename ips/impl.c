@@ -5,13 +5,8 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <linux/compiler.h>
-#include <linux/err.h>
-#include <linux/errno.h>
 #include <linux/rhashtable.h>
 #include <linux/slab.h>
-#include <linux/types.h>
-#include <net/dst_cache.h>
 
 #include "impl.h"
 

@@ -5,18 +5,6 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <linux/compiler.h>
-#include <linux/err.h>
-#include <linux/in.h>
-#include <linux/net.h>
-#include <linux/udp.h>
-#include <net/dst_cache.h>
-#include <net/flow.h>
-#include <net/inet_sock.h>
-#include <net/ip.h>
-#include <net/net_namespace.h>
-#include <net/route.h>
-#include <net/sock.h>
 #include <net/udp_tunnel.h>
 
 #include "impl.h"

@@ -10,7 +10,6 @@
 
 #include <linux/netdevice.h>
 #include <linux/ptr_ring.h>
-#include <linux/skbuff.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
 #include <net/dst_cache.h>

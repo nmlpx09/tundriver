@@ -5,10 +5,7 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
-#include <linux/compiler.h>
-#include <linux/errno.h>
 #include <linux/skbuff.h>
-#include <linux/types.h>
 
 #include "impl.h"
 #include "table.h"
