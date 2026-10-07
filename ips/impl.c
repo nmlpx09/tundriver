@@ -38,7 +38,7 @@ static void ips_entry_free(void* ptr, void* arg)
 {
     struct ips_entry* entry = ptr;
 
-    dst_cache_destroy(&entry->dst_cache);
+    dst_cache_destroy(&entry->dc);
     kfree(entry);
 }
 
@@ -81,7 +81,7 @@ static int ips_add_peer(struct ips_storage* storage, __be32 key8, __be64 peer)
     if (entry) {
         if (READ_ONCE(entry->peer) != peer) {
             WRITE_ONCE(entry->peer, peer);
-            dst_cache_reset(&entry->dst_cache);
+            dst_cache_reset(&entry->dc);
         }
         rcu_read_unlock();
         return 0;
@@ -111,7 +111,7 @@ int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
         return -ENOMEM;
     }
 
-    err = dst_cache_init(&entry->dst_cache, GFP_KERNEL);
+    err = dst_cache_init(&entry->dc, GFP_KERNEL);
     if (err) {
         kfree(entry);
         return err;
@@ -122,7 +122,7 @@ int ips_add(struct ips_storage* storage, __be32 key32, __be32 ip, __be16 port)
 
     err = rhashtable_lookup_insert_fast(&storage->ht, &entry->node, ips_params);
     if (err) {
-        dst_cache_destroy(&entry->dst_cache);
+        dst_cache_destroy(&entry->dc);
         kfree(entry);
     }
     if (err == -EEXIST) {

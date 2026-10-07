@@ -7,6 +7,7 @@ TUN_IP=10.0.3.1
 
 OUT_DEVICE=$(ip -o route get 1.1.1.1 | awk '{for(i=1; i<=NF; i++) if($i=="dev") print $(i+1)}')
 SRC_PORT=69
+KEY=
 
 MODULE=tnet
 
@@ -44,6 +45,7 @@ check_vars() {
     [[ -z "$OUT_DEVICE" ]] && empty_vars+=(OUT_DEVICE)
     [[ -z "$SRC_PORT" ]]   && empty_vars+=(SRC_PORT)
     [[ -z "$MODULE" ]]     && empty_vars+=(MODULE)
+    [[ -z "$KEY" ]]        && empty_vars+=(KEY)
 
     if [[ ${#empty_vars[@]} -gt 0 ]]; then
         echo "empty vars: ${empty_vars[*]}"
@@ -58,7 +60,7 @@ case "${1:-}" in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        modprobe "$MODULE" src_port="$SRC_PORT"
+        modprobe "$MODULE" src_port="$SRC_PORT" key="$KEY"
 
         if ! add_rules; then
             echo "unsuccess add_rules"

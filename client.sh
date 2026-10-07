@@ -4,6 +4,7 @@ set -exu
 
 DEST_IP=
 DEST_PORT=69
+KEY=
 
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.2
@@ -46,6 +47,7 @@ check_vars() {
     [[ -z "$TUN_DEVICE" ]] && empty_vars+=(TUN_DEVICE)
     [[ -z "$TUN_IP" ]]     && empty_vars+=(TUN_IP)
     [[ -z "$MODULE" ]]     && empty_vars+=(MODULE)
+    [[ -z "$KEY" ]]        && empty_vars+=(KEY)
 
     if [[ ${#empty_vars[@]} -gt 0 ]]; then
         echo "empty vars: ${empty_vars[*]}"
@@ -60,7 +62,7 @@ case "${1:-}" in
     "c")
         check_interface && echo "interface $TUN_DEVICE exists" && exit 1
 
-        modprobe "$MODULE" dest_ip="$DEST_IP" dest_port="$DEST_PORT"
+        modprobe "$MODULE" dest_ip="$DEST_IP" dest_port="$DEST_PORT" key="$KEY"
 
         if ! add_rules; then
             echo "unsuccess add_rules"

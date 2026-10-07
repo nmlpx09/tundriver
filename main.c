@@ -35,6 +35,7 @@
 static char* dest_ip = "0.0.0.0";
 static int dest_port = 1;
 static int src_port = 0;
+static char* key = "";
 
 module_param(dest_ip, charp, 0444);
 MODULE_PARM_DESC(dest_ip, "Destination IP address");
@@ -42,6 +43,8 @@ module_param(dest_port, int, 0444);
 MODULE_PARM_DESC(dest_port, "Destination UDP port");
 module_param(src_port, int, 0444);
 MODULE_PARM_DESC(src_port, "Source UDP port");
+module_param(key, charp, 0444);
+MODULE_PARM_DESC(key, "RC4 encryption key");
 
 static struct net_device* tdev;
 
@@ -52,6 +55,7 @@ static void tx(struct work_struct* work)
     struct net_device* dev = tun->dev;
     struct socket* sock = READ_ONCE(tun->sock);
     __maybe_unused struct ips_storage* ips = READ_ONCE(tun->ips);
+    struct crypt_ctx* cx = READ_ONCE(tun->cx);
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
 
@@ -81,7 +85,7 @@ static void tx(struct work_struct* work)
 
             __maybe_unused __be32 daddr = ip_hdr(skb)->daddr;
 
-            if (unlikely(encrypt(skb))) {
+            if (unlikely(encrypt(cx, skb))) {
                 dev_dstats_tx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
@@ -99,11 +103,11 @@ static void tx(struct work_struct* work)
             __be64 peer = READ_ONCE(entry->peer);
             __be32 tip = (__be32)peer;
             __be16 tport = (__be16)(peer >> 32);
-            struct dst_cache* dc = &entry->dst_cache;
+            struct dst_cache* dc = &entry->dc;
         #else
             __be32 tip = READ_ONCE(tun->tip);
             __be16 tport = READ_ONCE(tun->tport);
-            struct dst_cache* dc = &tun->dst_cache;
+            struct dst_cache* dc = &tun->dc;
         #endif
 
             skb->mark = 0;
@@ -130,6 +134,7 @@ static void rx(struct work_struct* work)
     struct tun_ctx* tun = rxw->ptr;
     struct net_device* dev = tun->dev;
     __maybe_unused struct ips_storage* ips = READ_ONCE(tun->ips);
+    struct crypt_ctx* cx = READ_ONCE(tun->cx);
     struct sk_buff* batch[BATCH];
     struct sk_buff* skb = NULL;
     int n, i;
@@ -157,7 +162,7 @@ static void rx(struct work_struct* work)
 
             skb_reset_network_header(skb);
 
-            if (unlikely(decrypt(skb))) {
+            if (unlikely(decrypt(cx, skb))) {
                 dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
@@ -374,11 +379,18 @@ static int __init minit(void)
     tun->tip = tip;
     tun->tport = htons(dest_port);
 
+    tun->cx = crypt_init(key, MTU);
+    if (IS_ERR(tun->cx)) {
+        err = PTR_ERR(tun->cx);
+        pr_err("tnet: crypt init failed: %d\n", err);
+        goto err_netdev;
+    }
+
     tun->sock = sock_init(htons(src_port));
     if (IS_ERR(tun->sock)) {
         err = PTR_ERR(tun->sock);
         pr_err("tnet: sock init failed: %d\n", err);
-        goto err_netdev;
+        goto err_crypt;
     }
 
     tun->ips = ips_init();
@@ -388,7 +400,7 @@ static int __init minit(void)
         goto err_sock;
     }
 
-    err = dst_cache_init(&tun->dst_cache, GFP_KERNEL);
+    err = dst_cache_init(&tun->dc, GFP_KERNEL);
     if (err) {
         pr_err("tnet: dst_cache init failed: %d\n", err);
         goto err_ips;
@@ -428,13 +440,16 @@ err_rx_ctx:
 err_tx_ctx:
     work_ctx_destroy(&tun->tx);
 err_cache:
-    dst_cache_destroy(&tun->dst_cache);
+    dst_cache_destroy(&tun->dc);
 err_ips:
     ips_close(tun->ips);
 err_sock:
     sock_close(tun->sock);
+err_crypt:
+    crypt_close(tun->cx);
 err_netdev:
     free_netdev(tdev);
+
     return err;
 }
 
@@ -461,7 +476,7 @@ static void __exit mexit(void)
 
     work_ctx_destroy(&tun->rx);
 
-    dst_cache_destroy(&tun->dst_cache);
+    dst_cache_destroy(&tun->dc);
 
     if (tun->sock) {
         sock_close(tun->sock);
@@ -471,6 +486,11 @@ static void __exit mexit(void)
     if (tun->ips) {
         ips_close(tun->ips);
         WRITE_ONCE(tun->ips, NULL);
+    }
+
+    if (tun->cx) {
+        crypt_close(tun->cx);
+        WRITE_ONCE(tun->cx, NULL);
     }
 
     free_netdev(tdev);

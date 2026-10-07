@@ -14,6 +14,7 @@
 #include <linux/workqueue.h>
 #include <net/dst_cache.h>
 
+#include <crypt/types.h>
 #include <ips/types.h>
 
 struct worker {
@@ -35,7 +36,9 @@ struct tun_ctx {
 
     struct ips_storage* ips;
 
-    struct dst_cache dst_cache;
+    struct crypt_ctx* cx;
+
+    struct dst_cache dc;
 
     struct work_ctx tx;
     struct work_ctx rx;

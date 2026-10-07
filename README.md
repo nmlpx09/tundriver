@@ -1,6 +1,6 @@
 # tnet
 
-Linux kernel module that creates a virtual network interface encapsulating IPv4 packets over obfuscated UDP tunnels.
+Linux kernel module that creates a virtual network interface encapsulating IPv4 packets over encrypted UDP tunnels.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ rx: UDP recv (encap_rcv) → ptr_ring_produce_bh → queue_work_on(cpu)
          worker: ptr_ring_consume_batched_bh → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
 ```
 
-"Encryption" is a per-byte substitution cipher (256-entry lookup table) — this is **obfuscation, not cryptographically secure encryption**. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
+Encryption is RC4 (stream cipher) keyed by the `key` module parameter. At module load, `crypt_init` runs the RC4 KSA (key scheduling) + PRGA (keystream generation) once to pre-generate a fixed-length keystream buffer (`MTU` bytes). Each packet is then encrypted/decrypted by XORing its payload with this pre-computed keystream (`prga[i % lprga]`). RC4 is symmetric, so encrypt and decrypt are the same operation. This is stronger than a static substitution table but is **not cryptographically secure** — the same keystream is reused for every packet (no nonce/IV). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
 
 TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
@@ -75,6 +75,7 @@ make server && sudo make install_module && sudo make install_server
 | `dest_ip`   | charp  | 0444        | Destination IP address  |
 | `dest_port` | int    | 0444        | Destination UDP port    |
 | `src_port`  | int    | 0444        | Source UDP port         |
+| `key`       | charp  | 0444        | RC4 encryption key      |
 
 ## Usage
 
@@ -116,9 +117,9 @@ main.c          Module init/exit, netdevice ops, encap_rcv, async TX/RX (ptr_rin
 types.h         tun_ctx, worker definitions
 sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
-crypt/impl.c    Encrypt/decrypt (substitution cipher)
+crypt/impl.c    Encrypt/decrypt (RC4 stream cipher)
 crypt/impl.h
-crypt/table.h   256-byte encrypt/decrypt lookup tables
+crypt/types.h   crypt_ctx (prga keystream buffer + length)
 ips/impl.c      IPS rhashtable (add/get/close, RCU lookup)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
@@ -134,7 +135,7 @@ ips/types.h     ips_entry, ips_storage types
 
 ## WIP
 
-- AES-128-GCM encryption (replace substitution cipher)
+- AES-128-GCM encryption (replace RC4 cipher)
 
 ## License
 
