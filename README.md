@@ -21,21 +21,21 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 
 ```
 tx: ndo_start_xmit → skb_orphan → ptr_ring_produce_bh → queue_work_on(cpu)
-         worker: ptr_ring_consume_batched_bh → strip eth → validate IPv4 → encrypt → resolve peer → UDP send
+         worker: ptr_ring_consume_batched_bh → ensure_writable + linearize → strip eth → validate IPv4 → encrypt (XOR + prepend rs) → resolve peer → UDP send
 
 rx: UDP recv (encap_rcv) → ptr_ring_produce_bh → queue_work_on(cpu)
-         worker: ptr_ring_consume_batched_bh → strip UDP header → decrypt → validate IPv4 → add eth header → netif_rx
+         worker: ptr_ring_consume_batched_bh → validate length → ensure_writable + linearize → strip UDP header → decrypt (extract rs + XOR) → validate IPv4 → add eth header → netif_receive_skb_list
 ```
 
-Encryption is RC4 (stream cipher) keyed by the `key` module parameter. At module load, `crypt_init` runs the RC4 KSA (key scheduling) + PRGA (keystream generation) once to pre-generate a fixed-length keystream buffer (`MTU` bytes). Each packet is then encrypted/decrypted by XORing its payload with this pre-computed keystream (`prga[i % lprga]`). RC4 is symmetric, so encrypt and decrypt are the same operation. This is stronger than a static substitution table but is **not cryptographically secure** — the same keystream is reused for every packet (no nonce/IV). The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
+Encryption is RC4 (stream cipher) keyed by the `key` module parameter. At module load, `crypt_init` runs the RC4 KSA (key scheduling) + PRGA (keystream generation) once to pre-generate a fixed-length keystream buffer (`MTU` bytes). Each packet is encrypted by XORing its payload with this pre-computed keystream starting at a random offset: `data[i] ^= prga[(rs + i) % lprga]`, where `rs` is a random 32-bit seed (`get_random_u32`) generated per-packet. The seed is prepended to the encrypted payload in big-endian (`cpu_to_be32`) via `skb_push` so the receiver can recover the offset and decrypt. RC4 is symmetric, so encrypt and decrypt are the same XOR operation. The random `rs` prevents keystream reuse across packets, but there is **no MAC/integrity** — an attacker can flip ciphertext bits without detection. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
 
 TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
-RX is workqueue-based: the UDP `encap_rcv` callback enqueues skbs into a `ptr_ring` and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), decrypt, and push up via `netif_rx`.
+RX is workqueue-based: the UDP `encap_rcv` callback enqueues skbs into a `ptr_ring` and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), decrypt, and push up via `netif_receive_skb_list`.
 
 ## Build & Install
 
-Requires kernel headers installed (`/lib/modules/$(uname -r)/build`).
+Requires kernel headers installed (`/lib/modules/$(uname -r)/build`). **Requires a 64-bit system** — `WRITE_ONCE` on `__be64` is non-atomic on 32-bit.
 
 ### Makefile targets
 
@@ -127,11 +127,11 @@ ips/types.h     ips_entry, ips_storage types
 
 ## Configuration
 
-| Constant    | Value | Description                     |
-|-------------|-------|---------------------------------|
-| `MTU`       | 1472  | Device MTU (bytes)              |
-| `RING_SIZE` | 4096  | TX/RX ptr_ring depth (sk_buffs) |
-| `BATCH`     | 32    | TX/RX consume batch size        |
+| Constant    | Value | Description                                          |
+|-------------|-------|------------------------------------------------------|
+| `MTU`       | 1468  | Device MTU (bytes). 1472 - 4 (rs seed) = 1468        |
+| `RING_SIZE` | 4096  | TX/RX ptr_ring depth (sk_buffs)                      |
+| `BATCH`     | 32    | TX/RX consume batch size                             |
 
 ## WIP
 

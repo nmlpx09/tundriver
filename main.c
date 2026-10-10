@@ -28,7 +28,7 @@
 #include "types.h"
 
 #define DEV_NAME "tnet%d"
-#define MTU 1472
+#define MTU 1468
 #define RING_SIZE 4096
 #define BATCH 32
 
@@ -68,6 +68,18 @@ static void tx(struct work_struct* work)
 
         for (i = 0; i < n; i++) {
             skb = batch[i];
+
+            if (unlikely(skb_ensure_writable(skb, skb->len))) {
+                dev_dstats_tx_dropped(dev);
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
+            if (unlikely(skb_linearize(skb))) {
+                dev_dstats_tx_dropped(dev);
+                dev_kfree_skb_any(skb);
+                continue;
+            }
 
             if (unlikely(!skb_pull(skb, ETH_HLEN))) {
                 dev_dstats_tx_dropped(dev);
@@ -151,6 +163,18 @@ static void rx(struct work_struct* work)
                 continue;
             }
 
+            if (unlikely(skb_ensure_writable(skb, skb->len))) {
+                dev_dstats_rx_dropped(dev);
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
+            if (unlikely(skb_linearize(skb))) {
+                dev_dstats_rx_dropped(dev);
+                dev_kfree_skb_any(skb);
+                continue;
+            }
+
             __maybe_unused __be32 tip = ip_hdr(skb)->saddr;
             __maybe_unused __be16 tport = udp_hdr(skb)->source;
 
@@ -160,13 +184,13 @@ static void rx(struct work_struct* work)
                 continue;
             }
 
-            skb_reset_network_header(skb);
-
             if (unlikely(decrypt(cx, skb))) {
                 dev_dstats_rx_dropped(dev);
                 dev_kfree_skb_any(skb);
                 continue;
             }
+
+            skb_reset_network_header(skb);
 
             if (unlikely(ip_hdr(skb)->version != 4)) {
                 dev_dstats_rx_dropped(dev);
@@ -296,7 +320,7 @@ static void dsetup(struct net_device* dev)
     dev->flags &= ~IFF_MULTICAST;
     dev->pcpu_stat_type = NETDEV_PCPU_STAT_DSTATS;
     dev->mtu = MTU;
-    dev->needed_headroom = sizeof(struct iphdr) + sizeof(struct udphdr);
+    dev->needed_headroom = sizeof(struct iphdr) + sizeof(struct udphdr) + sizeof(__be32);
 
     eth_hw_addr_random(dev);
 }
@@ -461,10 +485,6 @@ static void __exit mexit(void)
 
     struct tun_ctx* tun = netdev_priv(tdev);
 
-    unregister_netdev(tdev);
-
-    work_ctx_destroy(&tun->tx);
-
     if (tun->sock) {
         struct sock* sk = tun->sock->sk;
         lock_sock(sk);
@@ -474,6 +494,9 @@ static void __exit mexit(void)
         synchronize_net();
     }
 
+    unregister_netdev(tdev);
+
+    work_ctx_destroy(&tun->tx);
     work_ctx_destroy(&tun->rx);
 
     dst_cache_destroy(&tun->dc);

@@ -5,6 +5,7 @@
  * Copyright (c) 2026 nlmpx09 <nmlpx09@duck.com>
  */
 
+#include <linux/random.h>
 #include <linux/string.h>
 #include <linux/skbuff.h>
 
@@ -17,41 +18,46 @@ static inline void swap_u8(u8* a, u8* b)
     *b = tmp;
 }
 
-static int crypt_rc4(struct crypt_ctx* ctx, struct sk_buff* skb)
+static void crypt_rc4(struct crypt_ctx* ctx, struct sk_buff* skb, u32 rs)
 {
-    int err;
-
-    err = skb_ensure_writable(skb, skb->len);
-    if (unlikely(err)) {
-        return err;
-    }
-
     u8* data = skb->data;
     const u8* prga = ctx->prga;
     const size_t len = skb_headlen(skb);
     const size_t lprga = ctx->lprga;
 
-    for (size_t i = 0; i < len; ++i) {
-        data[i] ^= prga[i % lprga];
+    for (size_t i = 0, j = rs; i < len; ++i, ++j) {
+        data[i] ^= prga[j % lprga];
     }
-
-    return 0;
 }
 
 int encrypt(struct crypt_ctx* ctx, struct sk_buff* skb)
 {
-    if (unlikely(!skb || !ctx || ctx->lprga == 0))
+    if (unlikely(!skb || !ctx || ctx->lprga == 0)) {
         return -EINVAL;
+    }
 
-    return crypt_rc4(ctx, skb);
+    u32 rs = get_random_u32();
+    crypt_rc4(ctx, skb, rs);
+
+    *(__be32*)skb_push(skb, sizeof(__be32)) = cpu_to_be32(rs);
+    return 0;
 }
 
 int decrypt(struct crypt_ctx* ctx, struct sk_buff* skb)
 {
-    if (unlikely(!skb || !ctx || ctx->lprga == 0))
+    if (unlikely(!skb || !ctx || ctx->lprga == 0)) {
         return -EINVAL;
+    }
 
-    return crypt_rc4(ctx, skb);
+    if (unlikely(skb->len < sizeof(__be32))) {
+        return -EINVAL;
+    }
+
+    u32 rs = be32_to_cpu(*(__be32*)skb->data);
+    skb_pull(skb, sizeof(__be32));
+
+    crypt_rc4(ctx, skb, rs);
+    return 0;
 }
 
 struct crypt_ctx* crypt_init(const char* key, size_t len)
