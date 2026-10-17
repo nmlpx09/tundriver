@@ -13,7 +13,7 @@
 
 #include "types.h"
 
-struct crypt_ctx* crypt_init(const char* key, size_t len);
+struct crypt_ctx* crypt_init(const char* key);
 
 void crypt_close(struct crypt_ctx* ctx);
 

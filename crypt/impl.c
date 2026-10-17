@@ -60,7 +60,7 @@ int decrypt(struct crypt_ctx* ctx, struct sk_buff* skb)
     return 0;
 }
 
-struct crypt_ctx* crypt_init(const char* key, size_t len)
+struct crypt_ctx* crypt_init(const char* key)
 {
     if (!key || !*key) {
         return ERR_PTR(-EINVAL);
@@ -90,16 +90,15 @@ struct crypt_ctx* crypt_init(const char* key, size_t len)
         return ERR_PTR(-ENOMEM);
     }
 
-    ctx->prga = kmalloc(len, GFP_KERNEL);
+    ctx->lprga = 1024 * 1024;
+    ctx->prga = kmalloc(ctx->lprga, GFP_KERNEL);
 
     if (!ctx->prga) {
         kfree(ctx);
         return ERR_PTR(-ENOMEM);
     }
 
-    ctx->lprga = len;
-
-    for (size_t k = 0; k < len; k++) {
+    for (size_t k = 0; k < ctx->lprga; k++) {
         i = i + 1;
         j = j + s[i];
 

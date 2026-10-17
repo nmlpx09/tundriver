@@ -403,7 +403,7 @@ static int __init minit(void)
     tun->tip = tip;
     tun->tport = htons(dest_port);
 
-    tun->cx = crypt_init(key, MTU);
+    tun->cx = crypt_init(key);
     if (IS_ERR(tun->cx)) {
         err = PTR_ERR(tun->cx);
         pr_err("tnet: crypt init failed: %d\n", err);
