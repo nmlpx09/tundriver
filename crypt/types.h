@@ -7,6 +7,7 @@
 struct crypt_ctx {
     u8* prga;
     size_t lprga;
+    u32 rskey;
 };
 
 #endif

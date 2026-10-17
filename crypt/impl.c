@@ -11,6 +11,16 @@
 
 #include "impl.h"
 
+static u32 hash32(const u8* data, size_t len)
+{
+    u32 h = 2166136261u;
+    for (size_t i = 0; i < len; i++) {
+        h ^= data[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
 static inline void swap_u8(u8* a, u8* b)
 {
     u8 tmp = *a;
@@ -39,7 +49,7 @@ int encrypt(struct crypt_ctx* ctx, struct sk_buff* skb)
     u32 rs = get_random_u32();
     crypt_rc4(ctx, skb, rs);
 
-    *(__be32*)skb_push(skb, sizeof(__be32)) = cpu_to_be32(rs);
+    *(__be32*)skb_push(skb, sizeof(__be32)) = cpu_to_be32(rs ^ ctx->rskey);
     return 0;
 }
 
@@ -53,7 +63,7 @@ int decrypt(struct crypt_ctx* ctx, struct sk_buff* skb)
         return -EINVAL;
     }
 
-    u32 rs = be32_to_cpu(*(__be32*)skb->data);
+    u32 rs = be32_to_cpu(*(__be32*)skb->data) ^ ctx->rskey;
     skb_pull(skb, sizeof(__be32));
 
     crypt_rc4(ctx, skb, rs);
@@ -106,6 +116,8 @@ struct crypt_ctx* crypt_init(const char* key)
         ctx->prga[k] = s[(s[i] + s[j]) & 0xFF];
     }
 
+    ctx->rskey = hash32((const u8*)key, keylen);
+
     return ctx;
 }
 
@@ -113,6 +125,7 @@ void crypt_close(struct crypt_ctx* ctx)
 {
     if (ctx) {
         kfree_sensitive(ctx->prga);
+        ctx->rskey = 0;
         kfree(ctx);
     }
 }

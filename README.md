@@ -21,13 +21,13 @@ Linux kernel module that creates a virtual network interface encapsulating IPv4 
 
 ```
 tx: ndo_start_xmit → skb_orphan → ptr_ring_produce_bh → queue_work_on(cpu)
-         worker: ptr_ring_consume_batched_bh → ensure_writable + linearize → strip eth → validate IPv4 → encrypt (XOR + prepend rs) → resolve peer → UDP send
+         worker: ptr_ring_consume_batched_bh → ensure_writable + linearize → strip eth → validate IPv4 → encrypt (XOR + prepend rs masked with rskey) → resolve peer → UDP send
 
 rx: UDP recv (encap_rcv) → ptr_ring_produce_bh → queue_work_on(cpu)
-         worker: ptr_ring_consume_batched_bh → validate length → ensure_writable + linearize → strip UDP header → decrypt (extract rs + XOR) → validate IPv4 → add eth header → netif_receive_skb_list
+         worker: ptr_ring_consume_batched_bh → validate length → ensure_writable + linearize → strip UDP header → decrypt (unmask rs with rskey + XOR) → validate IPv4 → add eth header → netif_receive_skb_list
 ```
 
-Encryption is RC4 (stream cipher) keyed by the `key` module parameter. At module load, `crypt_init` runs the RC4 KSA (key scheduling) + PRGA (keystream generation) once to pre-generate a fixed-length keystream buffer (`MTU` bytes). Each packet is encrypted by XORing its payload with this pre-computed keystream starting at a random offset: `data[i] ^= prga[(rs + i) % lprga]`, where `rs` is a random 32-bit seed (`get_random_u32`) generated per-packet. The seed is prepended to the encrypted payload in big-endian (`cpu_to_be32`) via `skb_push` so the receiver can recover the offset and decrypt. RC4 is symmetric, so encrypt and decrypt are the same XOR operation. The random `rs` prevents keystream reuse across packets, but there is **no MAC/integrity** — an attacker can flip ciphertext bits without detection. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
+Encryption is RC4 (stream cipher) keyed by the `key` module parameter. At module load, `crypt_init` runs the RC4 KSA (key scheduling) + PRGA (keystream generation) once to pre-generate a fixed 1 MiB keystream buffer (`1024 * 1024` bytes). Each packet is encrypted by XORing its payload with this pre-computed keystream starting at a random offset: `data[i] ^= prga[(rs + i) % lprga]`, where `rs` is a random 32-bit seed (`get_random_u32`) generated per-packet. The seed is prepended to the encrypted payload in big-endian via `skb_push` as `cpu_to_be32(rs ^ ctx->rskey)`, where `rskey` is a per-session 32-bit value derived from the password via a self-made FNV-1a hash (`hash32`). `rskey` masks the seed on the wire so the raw RC4 offset isn't transmitted in the clear; both peers compute the same `rskey` from the shared password, so the receiver recovers `rs = be32_to_cpu(...) ^ ctx->rskey` before XOR-decrypting. RC4 is symmetric, so encrypt and decrypt are the same XOR operation. The random `rs` prevents keystream reuse across packets, but there is **no MAC/integrity** — an attacker can flip ciphertext bits without detection. The server mode resolves the destination per-packet by looking up the inner IPv4 destination in the IPS table (rhashtable, RCU-protected lookup).
 
 TX is asynchronous: `ndo_start_xmit` enqueues skbs into a `ptr_ring` (lockless MPMC ring buffer) and schedules a per-CPU worker via `queue_work_on`. Workers drain the ring in batches (`BATCH`), encrypt, resolve the peer (server: IPS lookup; client: static endpoint), and send via `udp_tunnel_xmit_skb`. Round-robin CPU distribution parallelises encryption across cores.
 
@@ -119,7 +119,7 @@ sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
 crypt/impl.c    Encrypt/decrypt (RC4 stream cipher)
 crypt/impl.h
-crypt/types.h   crypt_ctx (prga keystream buffer + length)
+crypt/types.h   crypt_ctx (prga keystream buffer + length + rskey)
 ips/impl.c      IPS rhashtable (add/get/close, RCU lookup)
 ips/impl.h
 ips/types.h     ips_entry, ips_storage types
