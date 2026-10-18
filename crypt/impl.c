@@ -8,17 +8,19 @@
 #include <linux/random.h>
 #include <linux/string.h>
 #include <linux/skbuff.h>
+#include <crypto/sha2.h>
 
 #include "impl.h"
 
 static u32 hash32(const u8* data, size_t len)
 {
-    u32 h = 2166136261u;
-    for (size_t i = 0; i < len; i++) {
-        h ^= data[i];
-        h *= 16777619u;
-    }
-    return h;
+    u8 digest[SHA256_DIGEST_SIZE];
+    u32 r;
+
+    sha256(data, len, digest);
+    memcpy(&r, digest, sizeof(r));
+    memzero_explicit(digest, sizeof(digest));
+    return r;
 }
 
 static inline void swap_u8(u8* a, u8* b)
