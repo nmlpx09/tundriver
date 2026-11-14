@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 set -eu
 
@@ -12,15 +12,14 @@ KEY=
 MODULE=tnet
 
 check_sudo() {
-    if [ "$EUID" -ne 0 ]; then
-        echo "run on sudo"
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "run as root" >&2
         exit 1
     fi
 }
 
 check_interface() {
-    ip link show "$TUN_DEVICE" &> /dev/null || return 1
-    return 0
+    ip link show "$TUN_DEVICE" > /dev/null 2>&1
 }
 
 add_rules() {
@@ -38,17 +37,17 @@ remove_rules() {
 }
 
 check_vars() {
-    local empty_vars=()
+    empty_vars=""
 
-    [[ -z "$TUN_DEVICE" ]] && empty_vars+=(TUN_DEVICE)
-    [[ -z "$TUN_IP" ]]     && empty_vars+=(TUN_IP)
-    [[ -z "$OUT_DEVICE" ]] && empty_vars+=(OUT_DEVICE)
-    [[ -z "$SRC_PORT" ]]   && empty_vars+=(SRC_PORT)
-    [[ -z "$MODULE" ]]     && empty_vars+=(MODULE)
-    [[ -z "$KEY" ]]        && empty_vars+=(KEY)
+    [ -z "$TUN_DEVICE" ] && empty_vars="$empty_vars TUN_DEVICE"
+    [ -z "$TUN_IP" ]     && empty_vars="$empty_vars TUN_IP"
+    [ -z "$OUT_DEVICE" ] && empty_vars="$empty_vars OUT_DEVICE"
+    [ -z "$SRC_PORT" ]   && empty_vars="$empty_vars SRC_PORT"
+    [ -z "$MODULE" ]     && empty_vars="$empty_vars MODULE"
+    [ -z "$KEY" ]        && empty_vars="$empty_vars KEY"
 
-    if [[ ${#empty_vars[@]} -gt 0 ]]; then
-        echo "empty vars: ${empty_vars[*]}"
+    if [ -n "$empty_vars" ]; then
+        echo "empty vars:$empty_vars"
         exit 1
     fi
 }
@@ -58,12 +57,15 @@ check_vars
 
 case "${1:-}" in
     "c")
-        check_interface && echo "interface $TUN_DEVICE exists" && exit 1
+        if check_interface; then
+            echo "interface $TUN_DEVICE exists" >&2
+            exit 1
+        fi
 
         modprobe "$MODULE" src_port="$SRC_PORT" key="$KEY"
 
         if ! add_rules; then
-            echo "unsuccess add_rules"
+            echo "unsuccess add_rules" >&2
             remove_rules
             modprobe -r "$MODULE"
             exit 1
@@ -71,7 +73,10 @@ case "${1:-}" in
         ;;
 
     "d")
-        ! check_interface && echo "interface $TUN_DEVICE not exists" && exit 1
+        if ! check_interface; then
+            echo "interface $TUN_DEVICE not exists" >&2
+            exit 1
+        fi
 
         remove_rules
         modprobe -r "$MODULE"

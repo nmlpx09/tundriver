@@ -113,16 +113,17 @@ Makefile         Build, install/uninstall targets
 client.sh        Client setup script (installed as /usr/bin/tun)
 server.sh        Server setup script (installed as /usr/bin/tun)
 tunnel.service   systemd unit for the server
-main.c          Module init/exit, netdevice ops, encap_rcv, async TX/RX (ptr_ring + workqueue)
-types.h         tun_ctx, worker definitions
-sock/impl.c     Kernel UDP socket (bind, udp_tunnel xmit)
+rules.v4         iptables rules for the server (filter + nat tables)
+main.c           Module init/exit, netdevice ops, encap_rcv, async TX/RX (ptr_ring + workqueue)
+types.h          tun_ctx, worker definitions
+sock/impl.c      Kernel UDP socket (bind, udp_tunnel xmit)
 sock/impl.h
-crypt/impl.c    Encrypt/decrypt (RC4 stream cipher)
+crypt/impl.c     Encrypt/decrypt (RC4 stream cipher)
 crypt/impl.h
-crypt/types.h   crypt_ctx (prga keystream buffer + length + rskey)
-ips/impl.c      IPS rhashtable (add/get/close, RCU lookup)
+crypt/types.h    crypt_ctx (prga keystream buffer + length + rskey)
+ips/impl.c       IPS rhashtable (add/get/close, RCU lookup)
 ips/impl.h
-ips/types.h     ips_entry, ips_storage types
+ips/types.h      ips_entry, ips_storage types
 ```
 
 ## Configuration
