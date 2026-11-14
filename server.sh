@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -exu
+set -eu
 
 TUN_DEVICE=tnet0
 TUN_IP=10.0.3.1

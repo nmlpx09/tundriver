@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -exu
+set -eu
 
 DEST_IP=
 DEST_PORT=69
