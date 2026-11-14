@@ -20,7 +20,7 @@ server:
 	$(MAKE) SERVER=1 -C $(KDIR) M=$(PWD) modules
 
 install_module:
-	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_NONE=y modules_install
+	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_MODULE_COMPRESS_ALL= CONFIG_MODULE_SIG_ALL= modules_install
 	depmod -a $(KVER)
 
 install_client:
